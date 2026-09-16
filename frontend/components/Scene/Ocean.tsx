@@ -5,6 +5,32 @@ import { useFrame } from "@react-three/fiber";
 import type { ShaderMaterial } from "three";
 import * as THREE from "three";
 
+// JavaScript equivalent of wave height calculation for ship physics
+export function getWaveHeightAt(x: number, z: number, time: number): number {
+  const wave1 = calculateWaveJS(1.0, 0.3, 0.28, 38.0, 0.9, x, z, time);
+  const wave2 = calculateWaveJS(-0.4, 0.9, 0.22, 22.0, 1.1, x, z, time);
+  const wave3 = calculateWaveJS(0.6, -0.8, 0.16, 12.0, 1.4, x, z, time);
+  const wave4 = calculateWaveJS(-0.8, -0.3, 0.10, 6.5, 1.8, x, z, time);
+  
+  return wave1.z + wave2.z + wave3.z + wave4.z;
+}
+
+function calculateWaveJS(dirX: number, dirY: number, steepness: number, wavelength: number, speed: number, x: number, z: number, time: number) {
+  const k = 6.2831853 / wavelength;
+  const c = Math.sqrt(9.8 / k) * speed;
+  const dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
+  const dx = dirX / dirLen;
+  const dy = dirY / dirLen;
+  const f = k * (dx * x + dy * z - c * time);
+  const a = steepness / k;
+  
+  return {
+    x: dx * (a * Math.cos(f)),
+    y: dy * (a * Math.cos(f)),
+    z: a * Math.sin(f)
+  };
+}
+
 const vertexShader = `
 uniform float uTime;
 varying vec2 vUv;
@@ -36,6 +62,20 @@ vec3 calculateWave(vec2 dir, float steepness, float wavelength, float speed, vec
     d.y * (a * cos(f)),
     a * sin(f)
   );
+}
+
+// Wave height calculation function (same as used in shader)
+float getWaveHeightAt(vec2 pos, float time) {
+  vec3 tangent = vec3(1.0, 0.0, 0.0);
+  vec3 binormal = vec3(0.0, 1.0, 0.0);
+  
+  vec3 wave1 = calculateWave(vec2(1.0, 0.3), 0.28, 38.0, 0.9, pos, time, tangent, binormal);
+  vec3 wave2 = calculateWave(vec2(-0.4, 0.9), 0.22, 22.0, 1.1, pos, time, tangent, binormal);
+  vec3 wave3 = calculateWave(vec2(0.6, -0.8), 0.16, 12.0, 1.4, pos, time, tangent, binormal);
+  vec3 wave4 = calculateWave(vec2(-0.8, -0.3), 0.10, 6.5, 1.8, pos, time, tangent, binormal);
+  
+  vec3 totalDisp = wave1 + wave2 + wave3 + wave4;
+  return totalDisp.z;
 }
 
 void main() {
@@ -156,7 +196,7 @@ export function Ocean() {
       position={[0, -0.2, 0]}
       receiveShadow
     >
-      <planeGeometry args={[650, 650, 180, 180]} />
+      <planeGeometry args={[650, 650, 200, 200]} />
       <shaderMaterial
         uniforms={uniforms}
         vertexShader={vertexShader}
