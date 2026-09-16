@@ -164,16 +164,31 @@ function IcebreakerSilhouette() {
   );
 }
 
+// Icebreaker movement constants - precise physics tuning
+const MOVEMENT = {
+  MAX_FORWARD_SPEED: 25.0,    // Top speed in knots (fast icebreaker)
+  MAX_REVERSE_SPEED: 10.0,   // Max reverse (40% of forward)
+  ACCEL_FORWARD: 5.0,        // Forward acceleration (knots/s) - reaches speed quickly
+  ACCEL_REVERSE: 3.0,        // Reverse acceleration (slower than forward)
+  DRAG_FACTOR: 0.995,        // Per-frame drag for coasting (stops in ~3s from top speed)
+  MAX_TURN_RATE: 35.0,       // Max turn rate (degrees/s)
+  MIN_TURN_SPEED_RATIO: 0.15, // 15% of max speed for minimal turning
+  TURN_ACCEL: 40.0,         // Angular acceleration (degrees/s²)
+  TURN_DAMPING: 0.90,        // Angular damping when no turn input
+} as const;
+
 export function Vessel() {
   const group = useRef<THREE.Group>(null);
   const visible = usePolarisStore((s) => s.layers.vessel);
+  const vessel = usePolarisStore((s) => s.vessel);
   const lastCrit = useRef(0);
+  const angularVelocity = useRef(0); // Current turn rate (degrees/s)
 
   useFrame((_, dt) => {
     const state = usePolarisStore.getState();
     const {
       vessel,
-      keys,
+      keys: currentKeys,
       setVessel,
       tickTime,
       autoMode,
@@ -184,11 +199,12 @@ export function Vessel() {
     const route = selectLockedRoute(state);
 
     let heading = vessel.headingDeg;
-    const forwardKey = keys.w || keys.up;
-    const back = keys.s || keys.down;
-    const left = keys.a || keys.left;
-    const right = keys.d || keys.right;
+    const forwardKey = currentKeys.w || currentKeys.up;
+    const back = currentKeys.s || currentKeys.down;
+    const left = currentKeys.a || currentKeys.left;
+    const right = currentKeys.d || currentKeys.right;
 
+    // Auto-pilot mode follows route
     if (autoMode && route.points.length > 1) {
       const [sx, , sz] = latLonToScene(vessel.lat, vessel.lon);
       let best = route.points[route.points.length - 1];
@@ -205,23 +221,51 @@ export function Vessel() {
       const err = ((desired - heading + 540) % 360) - 180;
       heading = (heading + Math.max(-40 * dt, Math.min(40 * dt, err)) + 360) % 360;
     } else {
-      if (left) heading -= 38 * dt;
-      if (right) heading += 38 * dt;
+      // Manual control with speed-dependent turning and angular momentum
+      const currentSpeed = Math.abs(vessel.sogKnots);
+      const speedRatio = Math.max(MOVEMENT.MIN_TURN_SPEED_RATIO, Math.min(1.0, currentSpeed / MOVEMENT.MAX_FORWARD_SPEED));
+      const effectiveTurnRate = MOVEMENT.MAX_TURN_RATE * speedRatio;
+
+      // Apply angular acceleration based on input
+      if (left) {
+        angularVelocity.current = Math.max(-effectiveTurnRate, angularVelocity.current - MOVEMENT.TURN_ACCEL * dt);
+      } else if (right) {
+        angularVelocity.current = Math.min(effectiveTurnRate, angularVelocity.current + MOVEMENT.TURN_ACCEL * dt);
+      } else {
+        // Angular damping when no input
+        angularVelocity.current *= MOVEMENT.TURN_DAMPING;
+      }
+
+      // Apply rotation with smooth damping
+      heading += angularVelocity.current * dt;
       heading = (heading + 360) % 360;
     }
 
+    // Speed control with proper physics
     let sog = vessel.sogKnots;
-    if (autoMode) sog = Math.min(12, sog + 4 * dt);
-    else if (forwardKey) sog = Math.min(16, sog + 6 * dt);
-    else if (back) sog = Math.max(0, sog - 8 * dt);
-    else sog = Math.max(0, sog - 1.6 * dt);
+    if (forwardKey) {
+      // Forward acceleration: velocity += acceleration * dt
+      sog = Math.min(MOVEMENT.MAX_FORWARD_SPEED, sog + MOVEMENT.ACCEL_FORWARD * dt);
+    } else if (back) {
+      // Reverse acceleration (slower than forward)
+      sog = Math.max(-MOVEMENT.MAX_REVERSE_SPEED, sog - MOVEMENT.ACCEL_REVERSE * dt);
+    } else {
+      // Apply drag force for coasting: velocity *= dragFactor
+      sog *= MOVEMENT.DRAG_FACTOR;
+      
+      // Stop completely when very slow to prevent drift
+      if (Math.abs(sog) < 0.01) sog = 0;
+    }
 
     const [vx, vz] = headingToVector(heading);
-    const nmPerSec = sog / 3600;
+    const nmPerSec = Math.abs(sog) / 3600;
     const step = nmPerSec * dt * 90;
     const [x, , z] = latLonToScene(vessel.lat, vessel.lon);
-    const nx = x + vx * step;
-    const nz = z + vz * step;
+    
+    // Reverse direction when going backwards
+    const direction = sog >= 0 ? 1 : -1;
+    const nx = x + vx * step * direction;
+    const nz = z + vz * step * direction;
     const { lat, lon } = sceneToLatLon(nx, nz);
 
     setVessel({
@@ -267,14 +311,25 @@ export function Vessel() {
 
     // Accurate heading rotation: Navigational 0° is North (-Z), rotated around Y
     const headingRad = THREE.MathUtils.degToRad(heading);
+    
     g.position.set(nx, 0, nz);
     g.rotation.y = -headingRad;
 
-    // Realistic wave motion: roll + pitch + heave
-    const speedFactor = Math.min(1.0, 0.3 + (sog / 16) * 0.7);
-    g.rotation.z = Math.sin(t * 1.6) * 0.035 * speedFactor; // Roll
-    g.rotation.x = Math.cos(t * 1.2) * 0.025 * speedFactor; // Pitch
-    g.position.y = 0.2 + Math.sin(t * 1.8) * 0.06 * speedFactor; // Bobbing
+    // Enhanced water physics synced with ocean
+    const speedFactor = Math.min(1.0, 0.2 + (Math.abs(sog) / 20) * 0.8);
+    const wavePhase = t * 1.2; // Sync with ocean wave frequency
+    
+    // Bobbing (heave) - vertical motion matching ocean waves
+    g.position.y = 0.2 + Math.sin(wavePhase) * 0.08 * speedFactor;
+    
+    // Pitch - nose up/down based on acceleration and waves
+    const pitchInput = (forwardKey ? 1 : 0) - (back ? 1 : 0);
+    g.rotation.x = Math.cos(wavePhase * 0.9) * 0.03 * speedFactor + pitchInput * 0.04 * speedFactor;
+    
+    // Roll - side-to-side tilt while turning, plus wave influence
+    const turnRoll = (left ? -1 : 0) + (right ? 1 : 0); // Roll from turning
+    const waveRoll = Math.sin(wavePhase * 1.1) * 0.04 * speedFactor; // Roll from waves
+    g.rotation.z = waveRoll + turnRoll * 0.03 * speedFactor;
   });
 
   if (!visible) return null;
@@ -282,7 +337,7 @@ export function Vessel() {
   return (
     <group ref={group}>
       <IcebreakerSilhouette />
-      <WakeTrail speed={8} />
+      <WakeTrail speed={vessel.sogKnots} />
     </group>
   );
 }
