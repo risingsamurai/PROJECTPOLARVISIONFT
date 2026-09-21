@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Route,
   PenTool,
+  Navigation,
 } from "lucide-react";
 import { fetchIcebergs, fetchRoutes } from "@/lib/api";
 import { usePolarisStore } from "@/lib/store";
@@ -63,9 +64,12 @@ export default function HomePage() {
   // States
   const [icebergs, setIcebergs] = useState<Iceberg[]>([]);
   const [iceCells, setIceCells] = useState<IceCell[]>([]);
-  const [routes, setRoutes] = useState<RouteOption[]>([]);
-  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const routes = usePolarisStore((s) => s.routes);
+  const selectedRouteId = usePolarisStore((s) => s.lockedRouteId);
+  const lockRoute = usePolarisStore((s) => s.lockRoute);
+  const fetchRoutesIfNeeded = usePolarisStore((s) => s.fetchRoutesIfNeeded);
   const [selectedIceberg, setSelectedIceberg] = useState<Iceberg | null>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
   // Layer Toggles
   const [showHeatmap, setShowHeatmap] = useState(true);
@@ -82,6 +86,7 @@ export default function HomePage() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawingPoints, setDrawingPoints] = useState<[number, number][]>([]); // Array of [lon, lat]
   const [exclusionZones, setExclusionZones] = useState<[number, number][][]>([]); // Array of polygons (array of [lon, lat])
+  const [warpToast, setWarpToast] = useState<{ lat: number; lon: number } | null>(null);
 
   // Fetch initial data
   useEffect(() => {
@@ -136,6 +141,10 @@ export default function HomePage() {
         });
       })
       .catch((err) => console.error("Error fetching status:", err));
+
+    // 4. Fetch initial routes with shared cache (only fetches if not already loaded)
+    fetchRoutesIfNeeded(startCoords, destCoords)
+      .catch((err) => console.error("Initial 2D route fetch failed:", err));
   }, []);
 
   // Map Initialization
@@ -254,6 +263,8 @@ export default function HomePage() {
           "line-width": 2.5,
         },
       });
+
+      setMapLoaded(true);
     });
 
     // Map Click Listener
@@ -278,6 +289,12 @@ export default function HomePage() {
       } else if (usePickModeRef.current === "dest") {
         setDestCoords([+clickedLat.toFixed(4), +clickedLng.toFixed(4)] as [number, number]);
         setPickMode("none");
+      } else {
+        // Normal surface click: Warp vessel position in 3D (Scope 5)
+        const lat = +clickedLat.toFixed(4);
+        const lon = +clickedLng.toFixed(4);
+        usePolarisStore.getState().warpShip(lat, lon);
+        setWarpToast({ lat, lon });
       }
     });
 
@@ -356,7 +373,7 @@ export default function HomePage() {
   // Redraw Sea Ice Heatmap Layer
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
 
     if (!showHeatmap || iceCells.length === 0) {
       if (map.getLayer("ice-heatmap-layer")) {
@@ -417,12 +434,14 @@ export default function HomePage() {
         },
       });
     }
-  }, [iceCells, showHeatmap]);
+  }, [iceCells, showHeatmap, mapLoaded]);
+
+
 
   // Redraw Selected Iceberg Trajectory
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
 
     const coneSrc = map.getSource("selected-iceberg-cone") as maplibregl.GeoJSONSource;
     const pathSrc = map.getSource("selected-iceberg-path") as maplibregl.GeoJSONSource;
@@ -667,12 +686,8 @@ export default function HomePage() {
   const handleRouteSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // POST expecting [lat, lon] order in backend three_routes()
-      const data = await fetchRoutes(startCoords, destCoords);
-      if (data.routes) {
-        setRoutes(data.routes);
-        setSelectedRouteId("balanced"); // lock balanced route by default
-      }
+      await fetchRoutesIfNeeded(startCoords, destCoords, true);
+      lockRoute("balanced");
     } catch (err) {
       console.error("Failed to compute routes:", err);
     }
@@ -681,7 +696,7 @@ export default function HomePage() {
   // Render/Update Route Paths on Map
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
 
     // Clear previous routes layers & sources
     const routeIds: RouteOption["id"][] = ["safest", "balanced", "fastest"];
@@ -728,7 +743,7 @@ export default function HomePage() {
         },
       });
     });
-  }, [routes, selectedRouteId, showRoutes]);
+  }, [routes, selectedRouteId, showRoutes, mapLoaded]);
 
   // Finish Polygon Drawing
   const handleFinishDrawing = () => {
@@ -980,6 +995,26 @@ export default function HomePage() {
           }}
         />
       </div>
+
+      {/* Scope 5 Warp Confirmation Toast */}
+      {warpToast && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/90 border border-cyan-500/40 backdrop-blur-md px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-mono text-cyan-200">
+          <Navigation className="h-4 w-4 text-cyan-400 animate-pulse shrink-0" />
+          <span>Vessel warped to [{warpToast.lat}, {warpToast.lon}]</span>
+          <Link
+            href="/simulation"
+            className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-white text-[11px] font-bold font-sans transition-all flex items-center gap-1"
+          >
+            View in 3D Simulator &rarr;
+          </Link>
+          <button
+            onClick={() => setWarpToast(null)}
+            className="text-white/40 hover:text-white ml-1 text-sm leading-none"
+          >
+            &times;
+          </button>
+        </div>
+      )}
 
       {/* Styled Canvas Layer Inversion Reversal Styles */}
       <style jsx global>{`
@@ -1305,7 +1340,8 @@ export default function HomePage() {
                           <td className="p-2 text-right font-semibold">{r.riskScore.toFixed(2)}</td>
                           <td className="p-2 text-center">
                             <button
-                              onClick={() => setSelectedRouteId(r.id)}
+                              type="button"
+                              onClick={() => lockRoute(r.id)}
                               className={`p-1 px-2.5 rounded text-[10px] font-bold uppercase transition-all ${
                                 isSelected
                                   ? "bg-emerald-500 text-slate-950 border border-emerald-400"

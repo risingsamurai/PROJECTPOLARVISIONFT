@@ -2,6 +2,7 @@
 
 import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import type { Iceberg } from "@/lib/mockData";
 import { latLonToScene } from "@/lib/geo";
@@ -149,6 +150,13 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
           />
         </line>
       )}
+
+      {/* Floating Iceberg Label */}
+      <Html position={[0, baseScale * 1.2, 0]} center distanceFactor={15}>
+        <div className="px-2 py-1 bg-black/60 backdrop-blur-sm border border-white/20 rounded text-[10px] font-mono text-white/90 whitespace-nowrap">
+          {iceberg.name}
+        </div>
+      </Html>
     </group>
   );
 }

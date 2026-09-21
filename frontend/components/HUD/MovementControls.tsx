@@ -25,14 +25,21 @@ function KeyCap({
 export function MovementControls() {
   const keys = usePolarisStore((s) => s.keys);
   const orbiting = usePolarisStore((s) => s.cameraOrbiting);
+  const vessel = usePolarisStore((s) => s.vessel);
+  
+  // Determine movement state
+  const speed = vessel.sogKnots;
+  let movementState = "IDLE";
+  if (speed > 0.1) movementState = "FORWARD";
+  else if (speed < -0.1) movementState = "REVERSE";
 
   return (
-    <section className="hud-panel px-5 py-3 flex items-center gap-6 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl">
+    <section className="hud-panel px-4 py-3 flex items-center gap-4 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl">
       <div>
         <h2 className="hud-header mb-2 text-center text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
-          Manual Helm
+          Ship Control
         </h2>
-        <div className="grid grid-cols-3 gap-1.5 w-[112px]">
+        <div className="grid grid-cols-3 gap-1.5 w-[100px]">
           <span />
           <KeyCap label="W" active={keys.w || keys.up} />
           <span />
@@ -40,20 +47,13 @@ export function MovementControls() {
           <KeyCap label="S" active={keys.s || keys.down} />
           <KeyCap label="D" active={keys.d || keys.right} />
         </div>
-      </div>
-      <div className="h-12 w-[1px] bg-white/10" />
-      <div className="text-center">
-        <h2 className="hud-header mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-white/50">
-          Camera
-        </h2>
-        <div
-          className={`h-14 w-14 rounded-full border-2 grid place-items-center text-[10px] font-bold uppercase tracking-wider transition-all duration-200 ${
-            orbiting
-              ? "border-cyan-400 bg-cyan-500/30 text-cyan-200 shadow-md shadow-cyan-500/30 scale-105"
-              : "border-white/20 bg-white/5 text-white/70 hover:border-white/40"
-          }`}
-        >
-          {orbiting ? "Orbiting" : "Drag"}
+        <div className="mt-2 text-center">
+          <div className="text-[11px] font-mono text-cyan-300 font-bold">
+            {Math.abs(speed).toFixed(1)} kn
+          </div>
+          <div className="text-[8px] uppercase tracking-wider text-white/40">
+            {movementState}
+          </div>
         </div>
       </div>
     </section>

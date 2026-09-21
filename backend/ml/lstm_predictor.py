@@ -22,7 +22,7 @@ try:
     import torch.nn as nn
     HAS_TORCH = True
     base_class = nn.Module
-except ImportError:
+except (ImportError, OSError):
     torch = None
     nn = None
     HAS_TORCH = False

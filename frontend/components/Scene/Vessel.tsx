@@ -5,6 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { selectLockedRoute, usePolarisStore } from "@/lib/store";
 import { headingToVector, latLonToScene, sceneToLatLon } from "@/lib/geo";
+import { getWaveHeightAt } from "./Ocean";
 
 // Animated expanding dual-trail foam wake
 function WakeTrail({ speed }: { speed: number }) {
@@ -164,17 +165,17 @@ function IcebreakerSilhouette() {
   );
 }
 
-// Icebreaker movement constants - precise physics tuning
+// Icebreaker movement constants - precise physics tuning (10x top speed model)
 const MOVEMENT = {
-  MAX_FORWARD_SPEED: 25.0,    // Top speed in knots (fast icebreaker)
-  MAX_REVERSE_SPEED: 10.0,   // Max reverse (40% of forward)
-  ACCEL_FORWARD: 5.0,        // Forward acceleration (knots/s) - reaches speed quickly
-  ACCEL_REVERSE: 3.0,        // Reverse acceleration (slower than forward)
-  DRAG_FACTOR: 0.995,        // Per-frame drag for coasting (stops in ~3s from top speed)
-  MAX_TURN_RATE: 35.0,       // Max turn rate (degrees/s)
-  MIN_TURN_SPEED_RATIO: 0.15, // 15% of max speed for minimal turning
-  TURN_ACCEL: 40.0,         // Angular acceleration (degrees/s²)
-  TURN_DAMPING: 0.90,        // Angular damping when no turn input
+  MAX_FORWARD_SPEED: 150.0,   // Top speed in knots (10x baseline)
+  MAX_REVERSE_SPEED: 60.0,    // Max reverse (40% of forward: 0.40 * 150.0)
+  ACCEL_FORWARD: 26.7,        // Forward acceleration (knots/s) - reaches ~80-90% top speed (~120 kn) in ~4.5s
+  ACCEL_REVERSE: 14.0,        // Reverse acceleration (scaled proportionally, ~4.3s to max reverse)
+  DRAG_FACTOR: 0.988,         // Coasting drag factor (~0.988 per frame at 60fps, coasting down over several seconds)
+  MAX_TURN_RATE: 28.0,        // Max turn rate (degrees/s) at full speed
+  MIN_TURN_SPEED_RATIO: 0.15, // 15% minimal turn rate clamp at near-zero speed
+  TURN_ACCEL: 35.0,           // Angular acceleration (degrees/s²) for smooth rudder response
+  TURN_DAMPING: 0.92,         // Angular damping factor when turn input is released
 } as const;
 
 export function Vessel() {
@@ -182,7 +183,11 @@ export function Vessel() {
   const visible = usePolarisStore((s) => s.layers.vessel);
   const vessel = usePolarisStore((s) => s.vessel);
   const lastCrit = useRef(0);
+  const insideBergsRef = useRef<Set<string>>(new Set());
   const angularVelocity = useRef(0); // Current turn rate (degrees/s)
+  const currentHeave = useRef(-0.32);
+  const currentPitch = useRef(0);
+  const currentRoll = useRef(0);
 
   useFrame((_, dt) => {
     const state = usePolarisStore.getState();
@@ -221,22 +226,43 @@ export function Vessel() {
       const err = ((desired - heading + 540) % 360) - 180;
       heading = (heading + Math.max(-40 * dt, Math.min(40 * dt, err)) + 360) % 360;
     } else {
-      // Manual control with speed-dependent turning and angular momentum
+      // Manual control with speed-dependent turning:
+      // effectiveTurnRate = maxTurnRate * clamp(currentSpeed / maxSpeed, 0.15, 1.0)
       const currentSpeed = Math.abs(vessel.sogKnots);
-      const speedRatio = Math.max(MOVEMENT.MIN_TURN_SPEED_RATIO, Math.min(1.0, currentSpeed / MOVEMENT.MAX_FORWARD_SPEED));
+      const speedRatio = Math.max(
+        MOVEMENT.MIN_TURN_SPEED_RATIO,
+        Math.min(1.0, currentSpeed / MOVEMENT.MAX_FORWARD_SPEED)
+      );
       const effectiveTurnRate = MOVEMENT.MAX_TURN_RATE * speedRatio;
 
-      // Apply angular acceleration based on input
+      let targetTurnRate = 0;
       if (left) {
-        angularVelocity.current = Math.max(-effectiveTurnRate, angularVelocity.current - MOVEMENT.TURN_ACCEL * dt);
+        targetTurnRate = -effectiveTurnRate;
       } else if (right) {
-        angularVelocity.current = Math.min(effectiveTurnRate, angularVelocity.current + MOVEMENT.TURN_ACCEL * dt);
-      } else {
-        // Angular damping when no input
-        angularVelocity.current *= MOVEMENT.TURN_DAMPING;
+        targetTurnRate = effectiveTurnRate;
       }
 
-      // Apply rotation with smooth damping
+      if (left || right) {
+        // Damped increment towards target turn rate (never snap directly)
+        if (targetTurnRate > angularVelocity.current) {
+          angularVelocity.current = Math.min(
+            targetTurnRate,
+            angularVelocity.current + MOVEMENT.TURN_ACCEL * dt
+          );
+        } else {
+          angularVelocity.current = Math.max(
+            targetTurnRate,
+            angularVelocity.current - MOVEMENT.TURN_ACCEL * dt
+          );
+        }
+      } else {
+        // Angular damping: decay smoothly when A/D is released
+        const turnDampingFrame = Math.pow(MOVEMENT.TURN_DAMPING, dt * 60);
+        angularVelocity.current *= turnDampingFrame;
+        if (Math.abs(angularVelocity.current) < 0.05) angularVelocity.current = 0;
+      }
+
+      // Apply rotation smoothly with angular momentum
       heading += angularVelocity.current * dt;
       heading = (heading + 360) % 360;
     }
@@ -244,17 +270,18 @@ export function Vessel() {
     // Speed control with proper physics
     let sog = vessel.sogKnots;
     if (forwardKey) {
-      // Forward acceleration: velocity += acceleration * dt
+      // Forward acceleration: velocity += acceleration * dt, clamped to maxForwardSpeed
       sog = Math.min(MOVEMENT.MAX_FORWARD_SPEED, sog + MOVEMENT.ACCEL_FORWARD * dt);
     } else if (back) {
-      // Reverse acceleration (slower than forward)
+      // Reverse acceleration: slower than forward acceleration, clamped to maxReverseSpeed
       sog = Math.max(-MOVEMENT.MAX_REVERSE_SPEED, sog - MOVEMENT.ACCEL_REVERSE * dt);
     } else {
-      // Apply drag force for coasting: velocity *= dragFactor
-      sog *= MOVEMENT.DRAG_FACTOR;
-      
-      // Stop completely when very slow to prevent drift
-      if (Math.abs(sog) < 0.01) sog = 0;
+      // Coasting drag force: velocity *= dragFactor per frame (framerate-independent)
+      const dragPerFrame = Math.pow(MOVEMENT.DRAG_FACTOR, dt * 60);
+      sog *= dragPerFrame;
+
+      // Stop completely when very slow to prevent infinitesimal drift
+      if (Math.abs(sog) < 0.05) sog = 0;
     }
 
     const [vx, vz] = headingToVector(heading);
@@ -298,12 +325,31 @@ export function Vessel() {
         lon: nearest.ib.lon,
       });
     }
-    if (nearest.d < 5 && t - lastCrit.current > 5) {
-      lastCrit.current = t;
-      pushAlert(
-        "CRITICAL",
-        `Vessel within ${nearest.d.toFixed(1)} nm of ${nearest.ib.name}`
-      );
+    // --- Proximity Alert Detection (Sound + Visual Flash) ---
+    // Track danger entry per-iceberg: trigger ONCE on entry, not repeatedly while inside
+    for (const ib of icebergs) {
+      const isHighRisk = ib.highRisk || (ib.dangerRadiusNm && ib.dangerRadiusNm > 0);
+      if (!isHighRisk) continue;
+
+      const dlat = ib.lat - lat;
+      const dlon = ib.lon - lon;
+      const distNm = Math.sqrt(dlat * dlat + dlon * dlon) * 60;
+      const dangerRadius = ib.dangerRadiusNm || 5;
+
+      if (distNm <= dangerRadius) {
+        if (!insideBergsRef.current.has(ib.id)) {
+          // New entry for this specific iceberg!
+          insideBergsRef.current.add(ib.id);
+          state.triggerProximityAlert(ib);
+          pushAlert(
+            "CRITICAL",
+            `Vessel within ${distNm.toFixed(1)} nm of ${ib.name}`
+          );
+        }
+      } else if (distNm > dangerRadius + 0.5) {
+        // Exited danger radius + 0.5 NM buffer: allow re-trigger on next entry
+        insideBergsRef.current.delete(ib.id);
+      }
     }
 
     const g = group.current;
@@ -311,25 +357,43 @@ export function Vessel() {
 
     // Accurate heading rotation: Navigational 0° is North (-Z), rotated around Y
     const headingRad = THREE.MathUtils.degToRad(heading);
-    
-    g.position.set(nx, 0, nz);
-    g.rotation.y = -headingRad;
 
-    // Enhanced water physics synced with ocean
-    const speedFactor = Math.min(1.0, 0.2 + (Math.abs(sog) / 20) * 0.8);
-    const wavePhase = t * 1.2; // Sync with ocean wave frequency
-    
-    // Bobbing (heave) - vertical motion matching ocean waves
-    g.position.y = 0.2 + Math.sin(wavePhase) * 0.08 * speedFactor;
-    
-    // Pitch - nose up/down based on acceleration and waves
-    const pitchInput = (forwardKey ? 1 : 0) - (back ? 1 : 0);
-    g.rotation.x = Math.cos(wavePhase * 0.9) * 0.03 * speedFactor + pitchInput * 0.04 * speedFactor;
-    
-    // Roll - side-to-side tilt while turning, plus wave influence
-    const turnRoll = (left ? -1 : 0) + (right ? 1 : 0); // Roll from turning
-    const waveRoll = Math.sin(wavePhase * 1.1) * 0.04 * speedFactor; // Roll from waves
-    g.rotation.z = waveRoll + turnRoll * 0.03 * speedFactor;
+    // --- Ocean-Synchronized Vessel Physics (Heave, Pitch, Roll) ---
+    // 1. Center wave height for vertical heave
+    const centerWave = getWaveHeightAt(nx, nz, t);
+    // Baseline waterline offset: places the black boot-topping band right at the ocean surface
+    const targetHeave = -0.32 + centerWave;
+    currentHeave.current = THREE.MathUtils.lerp(currentHeave.current, targetHeave, Math.min(1.0, dt * 10));
+
+    // 2. Pitch: sample wave height along length baseline (bow: +2.4 units forward, stern: -2.4 units aft)
+    const bowX = nx + vx * 2.4;
+    const bowZ = nz + vz * 2.4;
+    const sternX = nx - vx * 2.4;
+    const sternZ = nz - vz * 2.4;
+    const hBow = getWaveHeightAt(bowX, bowZ, t);
+    const hStern = getWaveHeightAt(sternX, sternZ, t);
+    const pitchWave = Math.atan2(hBow - hStern, 4.8);
+    // Acceleration pitch: nose dips slightly on forward acceleration, rises on reverse/braking
+    const pitchAccel = (forwardKey ? -0.022 : back ? 0.022 : 0) * Math.min(1.0, 0.4 + (Math.abs(sog) / 30) * 0.6);
+    const targetPitch = Math.max(-0.065, Math.min(0.065, pitchWave + pitchAccel));
+    currentPitch.current = THREE.MathUtils.lerp(currentPitch.current, targetPitch, Math.min(1.0, dt * 8));
+
+    // 3. Roll: sample wave height along beam (starboard: +1.0 unit right, port: -1.0 unit left)
+    const stbdX = nx - vz * 1.0;
+    const stbdZ = nz + vx * 1.0;
+    const portX = nx + vz * 1.0;
+    const portZ = nz - vx * 1.0;
+    const hStbd = getWaveHeightAt(stbdX, stbdZ, t);
+    const hPort = getWaveHeightAt(portX, portZ, t);
+    const rollWave = Math.atan2(hStbd - hPort, 2.0);
+    // Turn roll: vessel leans into turns based on current angular velocity
+    const rollTurn = -(angularVelocity.current / MOVEMENT.MAX_TURN_RATE) * 0.035;
+    const targetRoll = Math.max(-0.065, Math.min(0.065, rollWave + rollTurn));
+    currentRoll.current = THREE.MathUtils.lerp(currentRoll.current, targetRoll, Math.min(1.0, dt * 8));
+
+    g.position.set(nx, currentHeave.current, nz);
+    // Proper rotation order "YXZ": yaw (heading) first, then local pitch and roll
+    g.rotation.set(currentPitch.current, -headingRad, currentRoll.current, "YXZ");
   });
 
   if (!visible) return null;

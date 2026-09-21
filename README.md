@@ -17,18 +17,30 @@ See `DATA_SOURCES.md` and `DEVIATIONS.md`.
 
 ## Run locally (no Docker)
 
+**IMPORTANT**: Always start the backend FIRST, then the frontend. The backend fetches live data on startup.
+
 ```bash
-# backend
+# Step 1: Start backend (fetches live BYU/NSIDC/ERA5 data on startup)
 python -m venv .venv
 .venv\Scripts\pip install fastapi "uvicorn[standard]" httpx beautifulsoup4 lxml sqlalchemy numpy apscheduler python-dotenv pydantic-settings
 .venv\Scripts\python -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
-# or from backend/: uvicorn main:app --host 127.0.0.1 --port 8000
 
-# frontend (Node 20)
+# Step 2: Start frontend (in separate terminal)
 cd frontend
 npm install
 npm run dev
 ```
+
+**Correct backend startup command**: `python -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000`
+
+This command will:
+- Initialize SQLite database
+- Fetch live BYU/NIC iceberg data (38 bergs)
+- Fetch live NSIDC sea ice grids (616 cells) 
+- Fetch live ERA5 wind data (396 points)
+- Start scheduled data refresh every 6 hours (configurable via INGEST_INTERVAL_HOURS)
+
+**To use offline cached data only**: Set `OFFLINE_STARTUP=true` in `.env` file before starting backend.
 
 - Simulator: http://localhost:9000/simulation  
 - Overview map: http://localhost:9000  

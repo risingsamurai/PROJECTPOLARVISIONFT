@@ -77,7 +77,7 @@ export function AlertBanner() {
   // Audio Cue Trigger on Escalation
   useEffect(() => {
     if (!latest || !soundOn || !visible) return;
-    if (latest.tier === "CRITICAL" || latest.tier === "WARNING") {
+    if (latest.tier === "WARNING") {
       beep();
     }
   }, [latest, soundOn, visible]);

@@ -14,10 +14,12 @@ import { IcebergInfoPanel } from "@/components/HUD/IcebergInfoPanel";
 import { IceLevelLegend } from "@/components/HUD/IceLevelLegend";
 import { LayerControlPanel } from "@/components/HUD/LayerControlPanel";
 import { Minimap } from "@/components/HUD/Minimap";
-import { MovementControls } from "@/components/HUD/MovementControls";
+import { WASDIndicator } from "@/components/HUD/WASDIndicator";
 import { RouteInfoPanel } from "@/components/HUD/RouteInfoPanel";
+import { ReasoningPanel } from "@/components/HUD/ReasoningPanel";
+import { ProximityFlashOverlay } from "@/components/HUD/ProximityFlashOverlay";
 import { TopBar } from "@/components/HUD/TopBar";
-import { fetchIcebergs, fetchRoutes } from "@/lib/api";
+import { fetchIcebergs } from "@/lib/api";
 import { ALL_ICEBERGS } from "@/lib/mockData";
 import { usePolarisStore, type KeysDown } from "@/lib/store";
 
@@ -48,9 +50,9 @@ const KEY_MAP: Record<string, keyof KeysDown> = {
 export default function SimulationPage() {
   const setKey = usePolarisStore((s) => s.setKey);
   const setIcebergs = usePolarisStore((s) => s.setIcebergs);
-  const setRoutes = usePolarisStore((s) => s.setRoutes);
   const setDataReality = usePolarisStore((s) => s.setDataReality);
   const pushDetection = usePolarisStore((s) => s.pushDetection);
+  const fetchRoutesIfNeeded = usePolarisStore((s) => s.fetchRoutesIfNeeded);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -67,14 +69,9 @@ export default function SimulationPage() {
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
 
-    // Fetch initial backend A* routes
+    // Fetch initial backend A* routes if needed (cached in shared store)
     const { vessel, destination } = usePolarisStore.getState();
-    fetchRoutes([vessel.lat, vessel.lon], [destination.lat, destination.lon])
-      .then((data) => {
-        if (data.routes?.length) {
-          setRoutes(data.routes);
-        }
-      })
+    fetchRoutesIfNeeded([vessel.lat, vessel.lon], [destination.lat, destination.lon])
       .catch((err) => console.error("Initial 3D route fetch failed:", err));
 
     fetchIcebergs()
@@ -86,34 +83,6 @@ export default function SimulationPage() {
             predictedPath: ib.predictedPath ?? [],
           }));
           setIcebergs(processedIcebergs);
-          
-          const API = process.env.NEXT_PUBLIC_API_URL ?? "";
-          fetch(`${API}/api/status`)
-            .then((res) => {
-              if (!res.ok) throw new Error("status fetch failed");
-              return res.json();
-            })
-            .then((data) => {
-              console.log('Status API response:', data);
-              setDataReality({
-                nsidc: {
-                  status: data.nsidc?.status ?? "FALLBACK",
-                  lastLive: data.nsidc?.status === "LIVE" ? new Date().toISOString() : null,
-                  reason: data.nsidc?.status === "FALLBACK" ? (data.nsidc?.error ?? "Unknown error") : null,
-                },
-                byu: {
-                  status: data.byu?.status ?? "FALLBACK",
-                  lastLive: data.byu?.status === "LIVE" ? new Date().toISOString() : null,
-                  reason: data.byu?.status === "FALLBACK" ? (data.byu?.error ?? "Unknown error") : null,
-                },
-                era5: {
-                  status: data.era5?.status ?? "FALLBACK",
-                  lastLive: data.era5?.status === "LIVE" ? new Date().toISOString() : null,
-                  reason: data.era5?.status === "FALLBACK" ? (data.era5?.error ?? "Unknown error") : null,
-                },
-              });
-            })
-            .catch((err) => console.error("Error fetching status in simulation:", err));
         } else {
           setIcebergs(ALL_ICEBERGS);
         }
@@ -123,6 +92,33 @@ export default function SimulationPage() {
       });
 
     const API = process.env.NEXT_PUBLIC_API_URL ?? "";
+    fetch(`${API}/api/status`)
+      .then((res) => {
+        if (!res.ok) throw new Error("status fetch failed");
+        return res.json();
+      })
+      .then((data) => {
+        console.log('Status API response:', data);
+        setDataReality({
+          nsidc: {
+            status: data.nsidc?.status ?? "FALLBACK",
+            lastLive: data.nsidc?.status === "LIVE" ? new Date().toISOString() : null,
+            reason: data.nsidc?.status === "FALLBACK" ? (data.nsidc?.error ?? "Unknown error") : null,
+          },
+          byu: {
+            status: data.byu?.status ?? "FALLBACK",
+            lastLive: data.byu?.status === "LIVE" ? new Date().toISOString() : null,
+            reason: data.byu?.status === "FALLBACK" ? (data.byu?.error ?? "Unknown error") : null,
+          },
+          era5: {
+            status: data.era5?.status ?? "FALLBACK",
+            lastLive: data.era5?.status === "LIVE" ? new Date().toISOString() : null,
+            reason: data.era5?.status === "FALLBACK" ? (data.era5?.error ?? "Unknown error") : null,
+          },
+        });
+      })
+      .catch((err) => console.error("Error fetching status in simulation:", err));
+
     fetch(`${API}/api/ice/current`)
       .then((res) => {
         if (!res.ok) throw new Error("current ice fetch failed");
@@ -139,13 +135,14 @@ export default function SimulationPage() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [setKey, setIcebergs, setRoutes, setDataReality, pushDetection]);
+  }, [setKey, setIcebergs, fetchRoutesIfNeeded, setDataReality, pushDetection]);
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-slate-900">
       <div className="absolute inset-0">
         <SceneCanvas />
       </div>
+      <ProximityFlashOverlay />
       <div className="pointer-events-none absolute inset-0 p-3 flex flex-col gap-3">
         <div className="pointer-events-auto space-y-2">
           <TopBar />
@@ -171,12 +168,15 @@ export default function SimulationPage() {
               </Link>
             </div>
           </div>
-          <div className="pointer-events-none flex flex-col gap-2">
+          <div className="pointer-events-none flex flex-col gap-2 max-h-[calc(100vh-80px)] overflow-y-auto pr-1">
             <div className="pointer-events-auto">
               <IcebergInfoPanel />
             </div>
             <div className="pointer-events-auto">
               <RouteInfoPanel />
+            </div>
+            <div className="pointer-events-auto">
+              <ReasoningPanel />
             </div>
             <div className="pointer-events-auto">
               <AutoControls />
@@ -196,10 +196,11 @@ export default function SimulationPage() {
           <div className="pointer-events-auto">
             <Minimap />
           </div>
-          <div className="pointer-events-auto mx-auto mb-1">
-            <MovementControls />
-          </div>
           <div className="w-[200px]" />
+        </div>
+        {/* WASD Keypress Widget - fixed bottom-left, clear of left stack */}
+        <div className="fixed bottom-4 left-[280px] z-20 pointer-events-auto">
+          <WASDIndicator />
         </div>
       </div>
     </main>

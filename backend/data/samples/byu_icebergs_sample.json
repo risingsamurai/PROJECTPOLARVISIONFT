@@ -1,30 +1,30 @@
 [
   {
     "name": "A76C",
-    "lat": -53.55,
-    "lon": -29.95,
-    "doy": "235",
+    "lat": -54.0333,
+    "lon": -26.4167,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "A81",
-    "lat": -58.6,
-    "lon": -50.6667,
-    "doy": "235",
+    "lat": -57.4,
+    "lon": -47.3333,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "A83",
-    "lat": -60.9333,
-    "lon": -50.8667,
-    "doy": "233",
+    "lat": -60.9833,
+    "lon": -50.6667,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "A84",
-    "lat": -71.7,
-    "lon": -102.25,
-    "doy": "235",
+    "lat": -71.1667,
+    "lon": -101.6833,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
@@ -38,189 +38,189 @@
     "name": "B09B",
     "lat": -66.05,
     "lon": 143.2167,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "B09G",
     "lat": -68.2,
-    "lon": 41.4333,
-    "doy": "235",
+    "lon": 41.5167,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "B22A",
-    "lat": -69.3833,
-    "lon": 170.95,
-    "doy": "235",
+    "lat": -69.85,
+    "lon": 164.8667,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "B22F",
-    "lat": -67.1167,
-    "lon": -176.4333,
-    "doy": "235",
+    "lat": -67.4167,
+    "lon": -176.55,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "B22H",
-    "lat": -70.1667,
-    "lon": 163.85,
-    "doy": "235",
+    "lat": -70.1833,
+    "lon": 163.8,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "B29",
     "lat": -73.7167,
     "lon": -110.8667,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "B51",
     "lat": -74.2,
     "lon": -131.7,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C15",
     "lat": -65.8333,
     "lon": 143.0833,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C18B",
-    "lat": -67.05,
-    "lon": 47.3333,
-    "doy": "235",
+    "lat": -67.0333,
+    "lon": 47.3667,
+    "doy": "251",
     "source": "BYU/NIC"
   },
   {
     "name": "C18C",
     "lat": -68.5,
     "lon": 39.0167,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C21B",
     "lat": -64.9667,
     "lon": 95.8833,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C24",
     "lat": -64.8333,
     "lon": 96.0167,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C30",
     "lat": -64.7667,
     "lon": 96.2667,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C31",
     "lat": -64.7167,
     "lon": 96.5,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C33",
-    "lat": -65.2167,
-    "lon": 101.2167,
-    "doy": "235",
+    "lat": -65.2333,
+    "lon": 101.2,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C35",
-    "lat": -66.2167,
-    "lon": 142.95,
-    "doy": "235",
+    "lat": -66.2333,
+    "lon": 142.9333,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C36",
     "lat": -67.45,
     "lon": 146.5667,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "C39",
-    "lat": -65.9333,
-    "lon": 57.1667,
-    "doy": "235",
+    "lat": -65.7333,
+    "lon": 56.3333,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D15A",
     "lat": -66.6667,
     "lon": 81.7833,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D15B",
     "lat": -67.0167,
     "lon": 81.4667,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D15C",
     "lat": -67.2167,
     "lon": 79.5,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D15D",
-    "lat": -67.3,
+    "lat": -67.3167,
     "lon": 79.25,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D23",
     "lat": -69.4667,
     "lon": 74.6167,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D30B",
-    "lat": -60.5667,
-    "lon": -45.7167,
-    "doy": "234",
+    "lat": -60.5833,
+    "lon": -45.6833,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D32",
-    "lat": -58.3667,
-    "lon": -37.0167,
-    "doy": "235",
+    "lat": -57.9667,
+    "lon": -39.1333,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D33A",
-    "lat": -63.5667,
-    "lon": -55.2667,
-    "doy": "235",
+    "lat": -63.55,
+    "lon": -55.1833,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D33B",
-    "lat": -59.7,
-    "lon": -50.3667,
-    "doy": "233",
+    "lat": -59.15,
+    "lon": -46.65,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
@@ -234,35 +234,35 @@
     "name": "D34",
     "lat": -67.1,
     "lon": 81.9167,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D35",
-    "lat": -60.8833,
-    "lon": -43.7667,
-    "doy": "234",
+    "lat": -60.35,
+    "lon": -45.0,
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D36",
     "lat": -66.2667,
     "lon": 86.7667,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "D37",
     "lat": -69.2,
     "lon": 36.3333,
-    "doy": "235",
+    "doy": "252",
     "source": "BYU/NIC"
   },
   {
     "name": "UK324",
     "lat": -66.95,
-    "lon": 148.8333,
-    "doy": "235",
+    "lon": 148.8,
+    "doy": "252",
     "source": "BYU/NIC"
   }
 ]

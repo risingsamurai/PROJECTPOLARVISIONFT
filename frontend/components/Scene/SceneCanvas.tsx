@@ -10,6 +10,7 @@ import { IcebergField } from "./Iceberg";
 import { Ocean } from "./Ocean";
 import { RouteLine } from "./RouteLine";
 import { Vessel } from "./Vessel";
+import { AntarcticLandmass } from "./AntarcticLandmass";
 
 function ChaseCamera() {
   const { camera, gl } = useThree();
@@ -62,9 +63,19 @@ function ChaseCamera() {
   }, [gl]);
 
   useFrame(() => {
-    const { vessel, orbitYaw, orbitPitch, cameraDistance } =
+    const { vessel, orbitYaw, orbitPitch, cameraDistance, selectedIcebergId, icebergs } =
       usePolarisStore.getState();
-    const [x, , z] = latLonToScene(vessel.lat, vessel.lon);
+    
+    // Check if an iceberg is selected for camera targeting
+    let targetPosition = { lat: vessel.lat, lon: vessel.lon };
+    if (selectedIcebergId) {
+      const selectedIceberg = icebergs.find(ib => ib.id === selectedIcebergId);
+      if (selectedIceberg) {
+        targetPosition = { lat: selectedIceberg.lat, lon: selectedIceberg.lon };
+      }
+    }
+    
+    const [x, , z] = latLonToScene(targetPosition.lat, targetPosition.lon);
 
     // Navigational heading: 0° is North (-Z), 90° is East (+X)
     const vesselHeadingRad = THREE.MathUtils.degToRad(vessel.headingDeg);
@@ -80,7 +91,12 @@ function ChaseCamera() {
     const cy = 3.8 + Math.sin(orbitPitch) * cameraDistance;
 
     const targetPos = new THREE.Vector3(cx, cy, cz);
-    camera.position.lerp(targetPos, 0.1);
+    const distToTarget = camera.position.distanceTo(targetPos);
+    if (distToTarget > 120) {
+      camera.position.copy(targetPos);
+    } else {
+      camera.position.lerp(targetPos, 0.1);
+    }
 
     // Look slightly ahead of the vessel at deck level
     const lookTarget = new THREE.Vector3(
@@ -122,15 +138,35 @@ export function SceneCanvas() {
         gl.setClearColor(0x5a6878);
       }}
     >
-      <ambientLight intensity={0.6} />
+      <ambientLight intensity={0.4} />
       <directionalLight
-        position={[60, 90, 40]}
-        intensity={0.9}
+        position={[80, 120, 30]}
+        intensity={1.2}
         castShadow
+        color="#f0f9ff"
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
+        shadow-camera-near={0.5}
+        shadow-camera-far={500}
+        shadow-camera-left={-100}
+        shadow-camera-right={100}
+        shadow-camera-top={100}
+        shadow-camera-bottom={-100}
       />
-      <hemisphereLight args={["#dbeafe", "#1e293b", 0.45]} />
+      <hemisphereLight args={["#e0f2fe", "#1e3a8a", 0.6]} />
+      
+      {/* Sun Glow */}
+      <mesh position={[80, 120, 30]}>
+        <sphereGeometry args={[8, 32, 32]} />
+        <meshBasicMaterial color="#fef3c7" transparent opacity={0.3} />
+      </mesh>
+      <mesh position={[80, 120, 30]}>
+        <sphereGeometry args={[12, 32, 32]} />
+        <meshBasicMaterial color="#fde68a" transparent opacity={0.15} />
+      </mesh>
       <ChaseCamera />
       <Ocean />
+      <AntarcticLandmass />
       <IceHeatPatch />
       <Vessel />
       <IcebergField />

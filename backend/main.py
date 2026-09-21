@@ -1,4 +1,6 @@
 import asyncio
+import os
+import sys
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -125,11 +127,22 @@ async def ingest_all() -> None:
                 {"status": "FALLBACK", "error": f"Fetcher execution error: {e}"}
             )
 
-    await asyncio.gather(run_byu(), run_nsidc(), run_era5())
+    await run_byu()
+    await run_nsidc()
+    await run_era5()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    if sys.platform == "win32":
+        loop = asyncio.get_running_loop()
+        def _win_exception_handler(current_loop, context):
+            exception = context.get("exception")
+            if isinstance(exception, OSError) and getattr(exception, "winerror", None) in (64, 10054, 121, 22):
+                return
+            current_loop.default_exception_handler(context)
+        loop.set_exception_handler(_win_exception_handler)
+
     init_db()
     # Trigger ingestion in the background so startup isn't blocked
     asyncio.create_task(ingest_all())

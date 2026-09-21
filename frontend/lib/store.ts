@@ -7,6 +7,7 @@ import {
   type RouteOption,
   type VesselState,
 } from "./mockData";
+import { playProximityAlertSound } from "./audio";
 
 export type DataStatus = "LIVE" | "FALLBACK";
 
@@ -84,9 +85,24 @@ interface PolarisState {
   setDestination: (d: { lat: number; lon: number }) => void;
   soundOn: boolean;
   setSoundOn: (v: boolean) => void;
+  proximityFlashId: number;
+  triggerProximityAlert: (iceberg: { id: string; name: string }) => void;
   pushAlert: (tier: string, message: string) => void;
   pushDetection: (d: PolarisState["detections"][number]) => void;
   setDataReality: (dataReality: PolarisState["dataReality"]) => void;
+  routeEndpoints: { start: [number, number]; dest: [number, number] } | null;
+  routesFetched: boolean;
+  fetchRoutesIfNeeded: (
+    start: [number, number],
+    dest: [number, number],
+    force?: boolean
+  ) => Promise<RouteOption[]>;
+  sharedRoutes: RouteOption[];
+  setSharedRoutes: (routes: RouteOption[]) => void;
+  sharedRouteLastFetch: number;
+  setSharedRouteLastFetch: (timestamp: number) => void;
+  shipWarpTarget: { lat: number; lon: number; timestamp: number } | null;
+  warpShip: (lat: number, lon: number) => void;
 }
 
 const fallback = (reason: string): DataSourceReality => ({
@@ -95,13 +111,67 @@ const fallback = (reason: string): DataSourceReality => ({
   reason,
 });
 
+let inFlightRoutePromise: Promise<RouteOption[]> | null = null;
+let inFlightCoords: { start: [number, number]; dest: [number, number] } | null = null;
+
+const getInitialLockedRoute = (): RouteOption["id"] => {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem("polaris_locked_route");
+      if (saved === "safest" || saved === "balanced" || saved === "fastest") {
+        return saved;
+      }
+    } catch {}
+  }
+  return "balanced";
+};
+
+const getInitialRoutes = (): { routes: RouteOption[]; endpoints: { start: [number, number]; dest: [number, number] } | null; fetched: boolean } => {
+  if (typeof window !== "undefined") {
+    try {
+      const savedRoutes = localStorage.getItem("polaris_routes");
+      const savedEndpoints = localStorage.getItem("polaris_route_endpoints");
+      if (savedRoutes) {
+        const parsedRoutes = JSON.parse(savedRoutes);
+        if (Array.isArray(parsedRoutes) && parsedRoutes.length > 0) {
+          return {
+            routes: parsedRoutes,
+            endpoints: savedEndpoints ? JSON.parse(savedEndpoints) : null,
+            fetched: true,
+          };
+        }
+      }
+    } catch {}
+  }
+  return { routes: MOCK_ROUTES, endpoints: null, fetched: false };
+};
+
+const getInitialVessel = (): VesselState => {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem("polaris_warp_target");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.lat === "number" && typeof parsed.lon === "number") {
+          return { ...MOCK_VESSEL, lat: parsed.lat, lon: parsed.lon };
+        }
+      }
+    } catch {}
+  }
+  return { ...MOCK_VESSEL };
+};
+
+const initialRouteData = getInitialRoutes();
+
 export const usePolarisStore = create<PolarisState>((set, get) => ({
-  vessel: { ...MOCK_VESSEL },
+  vessel: getInitialVessel(),
   icebergs: [],
   selectedIcebergId: null,
-  routes: MOCK_ROUTES,
-  lockedRouteId: "balanced",
+  routes: initialRouteData.routes,
+  lockedRouteId: getInitialLockedRoute(),
   routeVersion: 0,
+  routeEndpoints: initialRouteData.endpoints,
+  routesFetched: initialRouteData.fetched,
   layers: {
     seaIce: true,
     icebergs: true,
@@ -126,9 +196,9 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   orbitPitch: 0.42,
   simTimeIso: new Date().toISOString(),
   dataReality: {
-    nsidc: fallback("Phase 1 mock ice grid; NSIDC fetcher not wired"),
-    byu: fallback("Phase 1 mock icebergs; BYU scrape is Phase 2"),
-    era5: fallback("Phase 1 unused; no CDS key"),
+    nsidc: fallback("Loading data status..."),
+    byu: fallback("Loading data status..."),
+    era5: fallback("Loading data status..."),
   },
   setVessel: (partial) =>
     set((s) => ({ vessel: { ...s.vessel, ...partial } })),
@@ -143,31 +213,100 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
       orbitPitch: pitch,
       cameraDistance: distance ?? s.cameraDistance,
     })),
-  lockRoute: (id) => set({ lockedRouteId: id }),
-  recalculateRoute: async () => {
-    const { vessel, destination, routeVersion } = get();
-    try {
-      const { fetchRoutes } = await import("./api");
-      const data = await fetchRoutes([vessel.lat, vessel.lon], [destination.lat, destination.lon]);
-      if (data.routes && data.routes.length > 0) {
-        set({
-          routes: data.routes,
-          routeVersion: routeVersion + 1,
-          alerts: [
-            ...get().alerts.slice(-40),
-            {
-              id: `INFO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-              tier: "INFO",
-              message: "A* land-avoiding route recalculating via backend",
-              ts: new Date().toISOString(),
-              timestamp: new Date().toISOString(),
-            },
-          ],
-        });
-      }
-    } catch (err) {
-      console.error("Failed to recalculate route:", err);
+  lockRoute: (id) => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("polaris_locked_route", id);
+      } catch {}
     }
+    set({ lockedRouteId: id });
+  },
+  fetchRoutesIfNeeded: async (start, dest, force = false) => {
+    const { routes, routeEndpoints, routesFetched } = get();
+    const isSameStart =
+      routeEndpoints &&
+      Math.abs(routeEndpoints.start[0] - start[0]) < 1e-4 &&
+      Math.abs(routeEndpoints.start[1] - start[1]) < 1e-4;
+    const isSameDest =
+      routeEndpoints &&
+      Math.abs(routeEndpoints.dest[0] - dest[0]) < 1e-4 &&
+      Math.abs(routeEndpoints.dest[1] - dest[1]) < 1e-4;
+
+    if (!force && routesFetched && routes.length > 0 && isSameStart && isSameDest) {
+      return routes;
+    }
+
+    const inFlightSame =
+      inFlightCoords &&
+      Math.abs(inFlightCoords.start[0] - start[0]) < 1e-4 &&
+      Math.abs(inFlightCoords.start[1] - start[1]) < 1e-4 &&
+      Math.abs(inFlightCoords.dest[0] - dest[0]) < 1e-4 &&
+      Math.abs(inFlightCoords.dest[1] - dest[1]) < 1e-4;
+
+    if (!force && inFlightRoutePromise && inFlightSame) {
+      return inFlightRoutePromise;
+    }
+
+    inFlightCoords = { start, dest };
+    inFlightRoutePromise = (async () => {
+      try {
+        const { fetchRoutes } = await import("./api");
+        const data = await fetchRoutes(start, dest);
+        if (data.routes && data.routes.length > 0) {
+          if (typeof window !== "undefined") {
+            try {
+              localStorage.setItem("polaris_routes", JSON.stringify(data.routes));
+              localStorage.setItem("polaris_route_endpoints", JSON.stringify({ start, dest }));
+            } catch {}
+          }
+          set((s) => ({
+            routes: data.routes,
+            sharedRoutes: data.routes,
+            routeEndpoints: { start, dest },
+            routesFetched: true,
+            routeVersion: s.routeVersion + 1,
+            vessel: {
+              ...s.vessel,
+              lat: start[0],
+              lon: start[1],
+            },
+            destination: {
+              lat: dest[0],
+              lon: dest[1],
+            },
+          }));
+          return data.routes;
+        }
+      } catch (err) {
+        console.error("Failed to fetch routes:", err);
+      } finally {
+        inFlightRoutePromise = null;
+        inFlightCoords = null;
+      }
+      return get().routes;
+    })();
+
+    return inFlightRoutePromise;
+  },
+  recalculateRoute: async () => {
+    const { vessel, destination } = get();
+    await get().fetchRoutesIfNeeded(
+      [vessel.lat, vessel.lon],
+      [destination.lat, destination.lon],
+      true
+    );
+    set((s) => ({
+      alerts: [
+        ...s.alerts.slice(-40),
+        {
+          id: `INFO-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          tier: "INFO",
+          message: "A* land-avoiding route recalculating via backend",
+          ts: new Date().toISOString(),
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    }));
   },
   tickTime: () => set({ simTimeIso: new Date().toISOString() }),
   autoMode: false,
@@ -177,9 +316,23 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   alerts: [],
   detections: [],
   soundOn: false,
+  proximityFlashId: 0,
+  triggerProximityAlert: (iceberg) => {
+    playProximityAlertSound();
+    set({ proximityFlashId: Date.now() });
+  },
+  sharedRoutes: MOCK_ROUTES,
+  sharedRouteLastFetch: 0,
   setIceGrid: (iceGrid) => set({ iceGrid }),
   setIcebergs: (icebergs) => set({ icebergs }),
-  setRoutes: (routes) => set({ routes }),
+  setRoutes: (routes) => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("polaris_routes", JSON.stringify(routes));
+      } catch {}
+    }
+    set({ routes, sharedRoutes: routes });
+  },
   setAutoMode: (v) => set({ autoMode: v }),
   setSoundOn: (v) => set({ soundOn: v }),
   setForecastDay: (d) => set({ forecastDay: d }),
@@ -198,7 +351,56 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   pushDetection: (d) =>
     set((s) => ({ detections: [...s.detections.slice(-30), d] })),
   setDataReality: (dataReality) => set({ dataReality }),
+  setSharedRoutes: (routes) => set({ routes, sharedRoutes: routes }),
+  setSharedRouteLastFetch: (timestamp) => set({ sharedRouteLastFetch: timestamp }),
+  shipWarpTarget: null,
+  warpShip: (lat, lon) => {
+    const warp = { lat, lon, timestamp: Date.now() };
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("polaris_warp_target", JSON.stringify(warp));
+      } catch {}
+    }
+    set((s) => ({
+      shipWarpTarget: warp,
+      vessel: {
+        ...s.vessel,
+        lat,
+        lon,
+        sogKnots: 0,
+      },
+    }));
+  },
 }));
 
 export const selectLockedRoute = (s: PolarisState) =>
   s.routes.find((r) => r.id === s.lockedRouteId) ?? s.routes[0];
+
+if (typeof window !== "undefined") {
+  (window as any).__polarisStore = usePolarisStore;
+
+  window.addEventListener("storage", (e) => {
+    if (e.key === "polaris_locked_route" && e.newValue) {
+      if (e.newValue === "safest" || e.newValue === "balanced" || e.newValue === "fastest") {
+        usePolarisStore.setState({ lockedRouteId: e.newValue });
+      }
+    }
+    if (e.key === "polaris_routes" && e.newValue) {
+      try {
+        const routes = JSON.parse(e.newValue);
+        if (Array.isArray(routes) && routes.length > 0) {
+          usePolarisStore.setState({ routes, sharedRoutes: routes, routesFetched: true });
+        }
+      } catch {}
+    }
+    if (e.key === "polaris_warp_target" && e.newValue) {
+      try {
+        const warp = JSON.parse(e.newValue);
+        if (warp && typeof warp.lat === "number" && typeof warp.lon === "number") {
+          usePolarisStore.getState().warpShip(warp.lat, warp.lon);
+        }
+      } catch {}
+    }
+  });
+}
+

@@ -140,3 +140,27 @@ Alert banner + CRITICAL cooldown when range < 5 nm. Thresholds loaded from `back
 - Integration with a dedicated geospatial service for land/water classification
 - User-defined no-go zones as a simpler alternative to full coastline data
 
+## Frontend Mock Data Fallback Fix (2026-09-12)
+
+**Problem:** Application repeatedly reverted to showing "Phase 1 mock ice grid" and "Phase 1 mock icebergs" messages in the Data Reality badge after restarts, even though the backend was correctly fetching live data.
+
+**Root Cause:** The frontend Zustand store (`frontend/lib/store.ts`) had hardcoded fallback messages in the default state:
+```typescript
+dataReality: {
+  nsidc: fallback("Phase 1 mock ice grid; NSIDC fetcher not wired"),
+  byu: fallback("Phase 1 mock icebergs; BYU scrape is Phase 2"),
+  era5: fallback("Phase 1 unused; no CDS key"),
+}
+```
+These defaults were shown when the frontend loaded before the backend was ready or if API calls failed, causing confusion about whether real data was being used.
+
+**Fix:** Replaced hardcoded "Phase 1 mock" messages with neutral "Loading data status..." defaults in the frontend store. The actual live data status is always fetched from the backend `/api/status` endpoint once the backend is running.
+
+**Correct Startup Procedure:** 
+1. Backend must be started FIRST: `python -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000`
+2. Frontend started SECOND: `cd frontend && npm run dev`
+3. Backend automatically fetches live BYU/NSIDC/ERA5 data on startup (unless OFFLINE_STARTUP=true is set in .env)
+4. Frontend then fetches and displays the real data status from the backend
+
+**No Separate Mock Backend:** There is no separate "Phase 1" backend - the mock data was only in frontend defaults. The backend (`main.py`) always defaults to live data fetching unless explicitly configured otherwise.
+
