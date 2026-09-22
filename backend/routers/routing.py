@@ -18,6 +18,7 @@ def timeout_handler(signum, frame):
     raise TimeoutError("Route computation timed out")
 
 
+@router.post("")
 @router.post("/")
 def compute_route(body: RouteRequest):
     try:

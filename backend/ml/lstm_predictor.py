@@ -178,7 +178,10 @@ def predict(
         seq.append([sim_start_lat, sim_start_lon, wind_u, wind_v, cur_u, cur_v])
 
     if ds is not None:
-        ds.close()
+        try:
+            ds.close()
+        except Exception:
+            pass
 
     seq = seq[:14]
     seq.reverse()

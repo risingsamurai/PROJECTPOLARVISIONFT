@@ -63,13 +63,22 @@ function ChaseCamera() {
   }, [gl]);
 
   useFrame(() => {
-    const { vessel, orbitYaw, orbitPitch, cameraDistance, selectedIcebergId, icebergs } =
-      usePolarisStore.getState();
-    
-    // Check if an iceberg is selected for camera targeting
+    const {
+      vessel,
+      orbitYaw,
+      orbitPitch,
+      cameraDistance,
+      selectedIcebergId,
+      icebergs,
+      cameraTargetCoord,
+    } = usePolarisStore.getState();
+
+    // Check if cameraTargetCoord or an iceberg is selected for camera targeting
     let targetPosition = { lat: vessel.lat, lon: vessel.lon };
-    if (selectedIcebergId) {
-      const selectedIceberg = icebergs.find(ib => ib.id === selectedIcebergId);
+    if (cameraTargetCoord) {
+      targetPosition = { lat: cameraTargetCoord[0], lon: cameraTargetCoord[1] };
+    } else if (selectedIcebergId) {
+      const selectedIceberg = icebergs.find((ib) => ib.id === selectedIcebergId);
       if (selectedIceberg) {
         targetPosition = { lat: selectedIceberg.lat, lon: selectedIceberg.lon };
       }

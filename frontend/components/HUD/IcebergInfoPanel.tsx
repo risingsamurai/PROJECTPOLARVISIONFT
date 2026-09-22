@@ -93,6 +93,22 @@ export function IcebergInfoPanel() {
               ))}
             </>
           )}
+          <div className="col-span-2 pt-2 mt-2 border-t border-white/10">
+            <button
+              type="button"
+              onClick={() => {
+                if (!iceberg || !vessel) return;
+                const dest = { lat: iceberg.lat, lon: iceberg.lon };
+                usePolarisStore.getState().setDestination(dest);
+                usePolarisStore
+                  .getState()
+                  .fetchRoutesIfNeeded([vessel.lat, vessel.lon], [iceberg.lat, iceberg.lon], true);
+              }}
+              className="w-full py-1.5 px-3 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-[11px] font-bold font-sans transition-all flex items-center justify-center gap-1.5 shadow-lg border border-emerald-400/40"
+            >
+              <span>Route to Target Iceberg &rarr;</span>
+            </button>
+          </div>
         </dl>
       )}
     </section>

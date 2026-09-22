@@ -31,6 +31,7 @@ def _enrich(row: dict) -> dict:
     }
 
 
+@router.get("")
 @router.get("/")
 def list_all():
     rows = list_icebergs()

@@ -53,6 +53,31 @@ export default function SimulationPage() {
   const setDataReality = usePolarisStore((s) => s.setDataReality);
   const pushDetection = usePolarisStore((s) => s.pushDetection);
   const fetchRoutesIfNeeded = usePolarisStore((s) => s.fetchRoutesIfNeeded);
+  const warpTarget = usePolarisStore((s) => s.warpTarget);
+
+  // Watch for warpTarget changing from 2D map:
+  // 1. Move the ship's position to that exact lat/lon
+  // 2. Camera automatically re-centers and follows the ship at the new position
+  // 3. Re-filter the real icebergs array already in the store around this new position
+  // 4. Clear warpTarget from the store after processing
+  useEffect(() => {
+    if (!warpTarget) return;
+
+    const { lat, lon } = warpTarget;
+    const store = usePolarisStore.getState();
+
+    // 1. Move ship position to exact lat/lon
+    store.setVessel({ lat, lon, sogKnots: 0 });
+
+    // Clear any prior selected iceberg so camera tracks the relocated ship
+    store.selectIceberg(null);
+
+    // 2. Re-filter the real icebergs array already in the store around this position
+    store.filterIcebergsAroundPosition(lat, lon, 50);
+
+    // 3. Clear warpTarget from the store after processing so revisiting doesn't re-trigger
+    store.clearWarpTarget();
+  }, [warpTarget]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -82,7 +107,14 @@ export default function SimulationPage() {
             headingDeg: ib.headingDeg ?? 90,
             predictedPath: ib.predictedPath ?? [],
           }));
-          setIcebergs(processedIcebergs);
+          const store = usePolarisStore.getState();
+          store.setAllIcebergs(processedIcebergs);
+
+          // Re-filter what's loaded around the active vessel position
+          const target = store.warpTarget;
+          const filterLat = target ? target.lat : store.vessel.lat;
+          const filterLon = target ? target.lon : store.vessel.lon;
+          store.filterIcebergsAroundPosition(filterLat, filterLon, 50);
         } else {
           setIcebergs(ALL_ICEBERGS);
         }

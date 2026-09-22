@@ -102,7 +102,15 @@ interface PolarisState {
   sharedRouteLastFetch: number;
   setSharedRouteLastFetch: (timestamp: number) => void;
   shipWarpTarget: { lat: number; lon: number; timestamp: number } | null;
+  warpTarget: { lat: number; lon: number } | null;
+  setWarpTarget: (target: { lat: number; lon: number } | null) => void;
+  clearWarpTarget: () => void;
+  allIcebergs: Iceberg[];
+  setAllIcebergs: (icebergs: Iceberg[]) => void;
+  filterIcebergsAroundPosition: (lat: number, lon: number, radiusNm?: number) => void;
   warpShip: (lat: number, lon: number) => void;
+  cameraTargetCoord: [number, number] | null;
+  setCameraTargetCoord: (coord: [number, number] | null) => void;
 }
 
 const fallback = (reason: string): DataSourceReality => ({
@@ -149,7 +157,9 @@ const getInitialRoutes = (): { routes: RouteOption[]; endpoints: { start: [numbe
 const getInitialVessel = (): VesselState => {
   if (typeof window !== "undefined") {
     try {
-      const saved = localStorage.getItem("polaris_warp_target");
+      const saved =
+        localStorage.getItem("polaris_vessel_pos") ||
+        localStorage.getItem("polaris_warp_target");
       if (saved) {
         const parsed = JSON.parse(saved);
         if (typeof parsed.lat === "number" && typeof parsed.lon === "number") {
@@ -159,6 +169,36 @@ const getInitialVessel = (): VesselState => {
     } catch {}
   }
   return { ...MOCK_VESSEL };
+};
+
+const getInitialWarpTarget = (): { lat: number; lon: number } | null => {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem("polaris_warp_target");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.lat === "number" && typeof parsed.lon === "number") {
+          return { lat: parsed.lat, lon: parsed.lon };
+        }
+      }
+    } catch {}
+  }
+  return null;
+};
+
+const getInitialDestination = (): { lat: number; lon: number } => {
+  if (typeof window !== "undefined") {
+    try {
+      const saved = localStorage.getItem("polaris_destination");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed.lat === "number" && typeof parsed.lon === "number") {
+          return { lat: parsed.lat, lon: parsed.lon };
+        }
+      }
+    } catch {}
+  }
+  return { lat: -68.72, lon: -49.55 };
 };
 
 const initialRouteData = getInitialRoutes();
@@ -253,10 +293,29 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
         const { fetchRoutes } = await import("./api");
         const data = await fetchRoutes(start, dest);
         if (data.routes && data.routes.length > 0) {
+          const firstPt = data.routes[0]?.points?.[0];
+          const lastPt = data.routes[0]?.points?.[data.routes[0].points.length - 1];
+          const realStartLat = firstPt ? firstPt.lat : start[0];
+          const realStartLon = firstPt ? firstPt.lon : start[1];
+          const realDestLat = lastPt ? lastPt.lat : dest[0];
+          const realDestLon = lastPt ? lastPt.lon : dest[1];
+
           if (typeof window !== "undefined") {
             try {
               localStorage.setItem("polaris_routes", JSON.stringify(data.routes));
               localStorage.setItem("polaris_route_endpoints", JSON.stringify({ start, dest }));
+              localStorage.setItem(
+                "polaris_vessel_pos",
+                JSON.stringify({ lat: realStartLat, lon: realStartLon })
+              );
+              localStorage.setItem(
+                "polaris_warp_target",
+                JSON.stringify({ lat: realStartLat, lon: realStartLon })
+              );
+              localStorage.setItem(
+                "polaris_destination",
+                JSON.stringify({ lat: realDestLat, lon: realDestLon })
+              );
             } catch {}
           }
           set((s) => ({
@@ -265,16 +324,19 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
             routeEndpoints: { start, dest },
             routesFetched: true,
             routeVersion: s.routeVersion + 1,
+            warpTarget: { lat: realStartLat, lon: realStartLon },
             vessel: {
               ...s.vessel,
-              lat: start[0],
-              lon: start[1],
+              lat: realStartLat,
+              lon: realStartLon,
+              sogKnots: 0,
             },
             destination: {
-              lat: dest[0],
-              lon: dest[1],
+              lat: realDestLat,
+              lon: realDestLon,
             },
           }));
+          get().filterIcebergsAroundPosition(realStartLat, realStartLon, 50);
           return data.routes;
         }
       } catch (err) {
@@ -311,7 +373,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   tickTime: () => set({ simTimeIso: new Date().toISOString() }),
   autoMode: false,
   forecastDay: 3,
-  destination: { lat: -68.72, lon: -49.55 },
+  destination: getInitialDestination(),
   iceGrid: [],
   alerts: [],
   detections: [],
@@ -324,7 +386,11 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   sharedRoutes: MOCK_ROUTES,
   sharedRouteLastFetch: 0,
   setIceGrid: (iceGrid) => set({ iceGrid }),
-  setIcebergs: (icebergs) => set({ icebergs }),
+  setIcebergs: (icebergs) =>
+    set((s) => ({
+      icebergs,
+      allIcebergs: s.allIcebergs.length === 0 && icebergs.length > 0 ? icebergs : s.allIcebergs,
+    })),
   setRoutes: (routes) => {
     if (typeof window !== "undefined") {
       try {
@@ -336,7 +402,14 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setAutoMode: (v) => set({ autoMode: v }),
   setSoundOn: (v) => set({ soundOn: v }),
   setForecastDay: (d) => set({ forecastDay: d }),
-  setDestination: (d) => set({ destination: d }),
+  setDestination: (d) => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("polaris_destination", JSON.stringify(d));
+      } catch {}
+    }
+    set({ destination: d });
+  },
   pushAlert: (tier, message) =>
     set((s) => {
       const ts = new Date().toISOString();
@@ -353,24 +426,52 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setDataReality: (dataReality) => set({ dataReality }),
   setSharedRoutes: (routes) => set({ routes, sharedRoutes: routes }),
   setSharedRouteLastFetch: (timestamp) => set({ sharedRouteLastFetch: timestamp }),
-  shipWarpTarget: null,
-  warpShip: (lat, lon) => {
-    const warp = { lat, lon, timestamp: Date.now() };
+  allIcebergs: [],
+  setAllIcebergs: (allIcebergs) => set({ allIcebergs }),
+  filterIcebergsAroundPosition: (lat, lon, radiusNm = 50) => {
+    const { allIcebergs } = get();
+    if (!allIcebergs || allIcebergs.length === 0) return;
+    const filtered = allIcebergs.filter((ib) => {
+      const dlat = (ib.lat - lat) * 60;
+      const dlon = (ib.lon - lon) * 60 * Math.cos((lat * Math.PI) / 180);
+      const dist = Math.hypot(dlat, dlon);
+      return dist <= radiusNm;
+    });
+    set({ icebergs: filtered });
+  },
+  warpTarget: getInitialWarpTarget(),
+  setWarpTarget: (warpTarget) => {
     if (typeof window !== "undefined") {
       try {
-        localStorage.setItem("polaris_warp_target", JSON.stringify(warp));
+        if (warpTarget) {
+          localStorage.setItem("polaris_warp_target", JSON.stringify(warpTarget));
+          localStorage.setItem("polaris_vessel_pos", JSON.stringify(warpTarget));
+        } else {
+          localStorage.removeItem("polaris_warp_target");
+        }
       } catch {}
     }
     set((s) => ({
-      shipWarpTarget: warp,
-      vessel: {
-        ...s.vessel,
-        lat,
-        lon,
-        sogKnots: 0,
-      },
+      warpTarget,
+      vessel: warpTarget
+        ? { ...s.vessel, lat: warpTarget.lat, lon: warpTarget.lon, sogKnots: 0 }
+        : s.vessel,
     }));
   },
+  clearWarpTarget: () => {
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem("polaris_warp_target");
+      } catch {}
+    }
+    set({ warpTarget: null, shipWarpTarget: null });
+  },
+  shipWarpTarget: null,
+  warpShip: (lat, lon) => {
+    get().setWarpTarget({ lat, lon });
+  },
+  cameraTargetCoord: null,
+  setCameraTargetCoord: (coord) => set({ cameraTargetCoord: coord }),
 }));
 
 export const selectLockedRoute = (s: PolarisState) =>
@@ -398,6 +499,14 @@ if (typeof window !== "undefined") {
         const warp = JSON.parse(e.newValue);
         if (warp && typeof warp.lat === "number" && typeof warp.lon === "number") {
           usePolarisStore.getState().warpShip(warp.lat, warp.lon);
+        }
+      } catch {}
+    }
+    if (e.key === "polaris_destination" && e.newValue) {
+      try {
+        const dest = JSON.parse(e.newValue);
+        if (dest && typeof dest.lat === "number" && typeof dest.lon === "number") {
+          usePolarisStore.setState({ destination: { lat: dest.lat, lon: dest.lon } });
         }
       } catch {}
     }

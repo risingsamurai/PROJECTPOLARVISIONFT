@@ -88,6 +88,15 @@ export default function HomePage() {
   const [exclusionZones, setExclusionZones] = useState<[number, number][][]>([]); // Array of polygons (array of [lon, lat])
   const [warpToast, setWarpToast] = useState<{ lat: number; lon: number } | null>(null);
 
+  // Auto-dismiss warp confirmation toast after 8 seconds
+  useEffect(() => {
+    if (!warpToast) return;
+    const timer = setTimeout(() => {
+      setWarpToast(null);
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [warpToast]);
+
   // Fetch initial data
   useEffect(() => {
     // 1. Fetch icebergs
@@ -96,6 +105,7 @@ export default function HomePage() {
         if (data.icebergs) {
           setIcebergs(data.icebergs);
           usePolarisStore.getState().setIcebergs(data.icebergs);
+          usePolarisStore.getState().setAllIcebergs(data.icebergs);
         }
       })
       .catch((err) => console.error("Error fetching icebergs:", err));
@@ -179,6 +189,7 @@ export default function HomePage() {
     }
 
     map.on("load", () => {
+      console.log("[MAP_ON_LOAD_START]");
       // Add source & layers for drawing zone
       map.addSource("drawing-polygon", {
         type: "geojson",
@@ -269,10 +280,21 @@ export default function HomePage() {
 
     // Map Click Listener
     map.on("click", (e) => {
+      // 1. Ignore clicks that landed on marker or popup DOM elements
+      const originalTarget = e.originalEvent?.target as HTMLElement | null;
+      if (
+        originalTarget &&
+        originalTarget.closest &&
+        (originalTarget.closest(".maplibregl-marker") ||
+          originalTarget.closest(".maplibregl-popup"))
+      ) {
+        return;
+      }
+
       const clickedLng = e.lngLat.lng;
       const clickedLat = e.lngLat.lat;
 
-      // Handle Drawing Zone
+      // 2. Handle Drawing Zone
       if (useIsDrawingRef.current) {
         setDrawingPoints((prev) => {
           const next: [number, number][] = [...prev, [clickedLng, clickedLat] as [number, number]];
@@ -282,20 +304,53 @@ export default function HomePage() {
         return;
       }
 
-      // Handle picking start/dest coords
+      // 3. Handle picking start/dest coords
       if (usePickModeRef.current === "start") {
         setStartCoords([+clickedLat.toFixed(4), +clickedLng.toFixed(4)] as [number, number]);
         setPickMode("none");
+        return;
       } else if (usePickModeRef.current === "dest") {
         setDestCoords([+clickedLat.toFixed(4), +clickedLng.toFixed(4)] as [number, number]);
         setPickMode("none");
-      } else {
-        // Normal surface click: Warp vessel position in 3D (Scope 5)
-        const lat = +clickedLat.toFixed(4);
-        const lon = +clickedLng.toFixed(4);
-        usePolarisStore.getState().warpShip(lat, lon);
-        setWarpToast({ lat, lon });
+        return;
       }
+
+      // 4. Exclude clicks on existing route lines, exclusion zones, or prediction lines
+      const interactiveLayers = [
+        "route-safest-layer",
+        "route-balanced-layer",
+        "route-fastest-layer",
+        "exclusion-zones-fill",
+        "exclusion-zones-outline",
+        "drawing-polygon-fill",
+        "drawing-polygon-outline",
+        "selected-iceberg-cone-fill",
+        "selected-iceberg-cone-outline",
+        "selected-iceberg-path-line",
+      ].filter((id) => map.getLayer(id));
+
+      if (interactiveLayers.length > 0) {
+        const features = map.queryRenderedFeatures(e.point, {
+          layers: interactiveLayers,
+        });
+        if (features && features.length > 0) {
+          const routeFeature = features.find((f) => f.layer.id.startsWith("route-"));
+          if (routeFeature) {
+            const match = routeFeature.layer.id.match(/^route-(safest|balanced|fastest)-layer$/);
+            if (match) {
+              lockRoute(match[1] as RouteOption["id"]);
+            }
+          }
+          return;
+        }
+      }
+
+      // 5. Valid click on the map surface itself: capture lat/lon, set warpTarget in store
+      const lat = +clickedLat.toFixed(4);
+      const lon = +clickedLng.toFixed(4);
+      usePolarisStore.getState().setWarpTarget({ lat, lon });
+      setStartCoords([lat, lon]);
+      setWarpToast({ lat, lon });
     });
 
     return () => {
@@ -696,53 +751,75 @@ export default function HomePage() {
   // Render/Update Route Paths on Map
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
+    if (!map) return;
 
-    // Clear previous routes layers & sources
-    const routeIds: RouteOption["id"][] = ["safest", "balanced", "fastest"];
-    routeIds.forEach((rid) => {
-      if (map.getLayer(`route-${rid}-layer`)) {
-        map.removeLayer(`route-${rid}-layer`);
-      }
-      if (map.getSource(`route-${rid}-source`)) {
-        map.removeSource(`route-${rid}-source`);
-      }
-    });
+    let isMounted = true;
 
-    if (!showRoutes || routes.length === 0) return;
+    const render = () => {
+      if (!isMounted || !map || !mapLoaded) return;
 
-    routes.forEach((r) => {
-      const rid = r.id;
-      const isSelected = selectedRouteId === rid;
-
-      // Color maps: Safest green, Balanced yellow, Fastest red
-      const color = rid === "safest" ? "#22c55e" : rid === "balanced" ? "#eab308" : "#ef4444";
-      const width = isSelected ? 6.5 : 3.0;
-      const opacity = isSelected ? 1.0 : 0.35;
-
-      map.addSource(`route-${rid}-source`, {
-        type: "geojson",
-        data: {
-          type: "Feature",
-          properties: {},
-          geometry: {
-            type: "LineString",
-            coordinates: r.points.map((p) => [p.lon, p.lat]),
-          },
-        },
+      // Clear previous routes layers & sources
+      const routeIds: RouteOption["id"][] = ["safest", "balanced", "fastest"];
+      routeIds.forEach((rid) => {
+        try {
+          if (map.getLayer(`route-${rid}-layer`)) {
+            map.removeLayer(`route-${rid}-layer`);
+          }
+          if (map.getSource(`route-${rid}-source`)) {
+            map.removeSource(`route-${rid}-source`);
+          }
+        } catch {}
       });
 
-      map.addLayer({
-        id: `route-${rid}-layer`,
-        type: "line",
-        source: `route-${rid}-source`,
-        paint: {
-          "line-color": color,
-          "line-width": width,
-          "line-opacity": opacity,
-        },
+      if (!showRoutes || !routes || routes.length === 0) return;
+
+      routes.forEach((r) => {
+        try {
+          const rid = r.id;
+          const isSelected = selectedRouteId === rid;
+
+          // Color maps: Safest green, Balanced yellow, Fastest red
+          const color = rid === "safest" ? "#22c55e" : rid === "balanced" ? "#eab308" : "#ef4444";
+          const width = isSelected ? 6.5 : 3.0;
+          const opacity = isSelected ? 1.0 : 0.35;
+
+          if (!r.points || r.points.length < 2) return;
+
+          map.addSource(`route-${rid}-source`, {
+            type: "geojson",
+            data: {
+              type: "Feature",
+              properties: {},
+              geometry: {
+                type: "LineString",
+                coordinates: r.points.map((p) => [p.lon, p.lat]),
+              },
+            },
+          });
+
+          map.addLayer({
+            id: `route-${rid}-layer`,
+            type: "line",
+            source: `route-${rid}-source`,
+            paint: {
+              "line-color": color,
+              "line-width": width,
+              "line-opacity": opacity,
+            },
+          });
+        } catch (err) {
+          console.error(`Error adding route layer for ${r.id}:`, err);
+        }
       });
-    });
+    };
+
+    if (mapLoaded) {
+      render();
+    }
+
+    return () => {
+      isMounted = false;
+    };
   }, [routes, selectedRouteId, showRoutes, mapLoaded]);
 
   // Finish Polygon Drawing
@@ -996,20 +1073,29 @@ export default function HomePage() {
         />
       </div>
 
-      {/* Scope 5 Warp Confirmation Toast */}
+      {/* Ship Relocated Warp Confirmation Toast */}
       {warpToast && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/90 border border-cyan-500/40 backdrop-blur-md px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-mono text-cyan-200">
+        <div
+          id="warp-confirmation-toast"
+          className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-cyan-500/50 backdrop-blur-md px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-mono text-cyan-200 animate-in fade-in slide-in-from-top-4 duration-300"
+        >
           <Navigation className="h-4 w-4 text-cyan-400 animate-pulse shrink-0" />
-          <span>Vessel warped to [{warpToast.lat}, {warpToast.lon}]</span>
+          <span className="font-semibold text-white">
+            Ship relocated — view in 3D simulator
+          </span>
+          <span className="text-[11px] text-cyan-300/80 font-mono">
+            [{warpToast.lat.toFixed(2)}°, {warpToast.lon.toFixed(2)}°]
+          </span>
           <Link
             href="/simulation"
-            className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-white text-[11px] font-bold font-sans transition-all flex items-center gap-1"
+            className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 hover:text-white text-[11px] font-bold font-sans transition-all flex items-center gap-1 shrink-0"
           >
-            View in 3D Simulator &rarr;
+            Open 3D Simulator &rarr;
           </Link>
           <button
             onClick={() => setWarpToast(null)}
-            className="text-white/40 hover:text-white ml-1 text-sm leading-none"
+            className="text-white/40 hover:text-white ml-1 text-base leading-none"
+            aria-label="Close"
           >
             &times;
           </button>

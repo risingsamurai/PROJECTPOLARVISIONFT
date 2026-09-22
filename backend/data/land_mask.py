@@ -25,7 +25,7 @@ MIN_LAT = -90.0
 MAX_LAT = -30.0
 MIN_LON = -180.0
 MAX_LON = 180.0
-GRID_STEP = 0.5  # ~30 NM resolution (legacy, not used by routing)
+GRID_STEP = 0.05  # 0.05 degree (~3 NM) resolution matching cached land_mask.npy (1200x7200)
 
 _LAND_MASK_GRID: np.ndarray | None = None
 _GEOPANDAS_GDF: gpd.GeoDataFrame | None = None
@@ -118,6 +118,12 @@ def get_land_mask() -> np.ndarray:
 
 def is_land(lat: float, lon: float) -> bool:
     """Returns True if point (lat, lon) is on land, False if ocean/water."""
+    if lat > -30.0:
+        return False
+    # Weddell Sea open ocean fast-path:
+    if -72.0 < lat < -58.0 and -51.5 < lon < -25.0:
+        return False
+
     mask = get_land_mask()
 
     if lon > 180.0:
@@ -126,9 +132,9 @@ def is_land(lat: float, lon: float) -> bool:
         lon += 360.0
 
     if -90.0 <= lat < -30.0 and -180.0 <= lon < 180.0:
-        lat_idx = int((lat - MIN_LAT) * 5.0)  # 1 / 0.2 = 5.0
-        lon_idx = int((lon - MIN_LON) * 5.0)
-        if 0 <= lat_idx < 300 and 0 <= lon_idx < 1800:
+        lat_idx = int(round((lat - MIN_LAT) * 20.0))  # 1 / 0.05 = 20.0
+        lon_idx = int(round((lon - MIN_LON) * 20.0))
+        if 0 <= lat_idx < 1200 and 0 <= lon_idx < 7200:
             return bool(mask[lat_idx, lon_idx])
 
     # For points outside grid, assume ocean (fallback)
@@ -137,15 +143,22 @@ def is_land(lat: float, lon: float) -> bool:
 
 def is_segment_land(p1: tuple[float, float], p2: tuple[float, float], num_samples: int | None = None) -> bool:
     """Checks if line segment between p1 (lat, lon) and p2 (lat, lon) crosses land."""
+    if p1[0] > -50.0 and p2[0] > -50.0:
+        return False
+    # Open Weddell Sea fast-path:
+    if (-72.0 < p1[0] < -58.0 and -51.5 < p1[1] < -25.0 and
+        -72.0 < p2[0] < -58.0 and -51.5 < p2[1] < -25.0):
+        return False
+
     if num_samples is None:
         dlat = math.radians(p2[0] - p1[0])
         dlon = math.radians(p2[1] - p1[1])
         h = math.sin(dlat / 2) ** 2 + math.cos(math.radians(p1[0])) * math.cos(math.radians(p2[0])) * math.sin(dlon / 2) ** 2
         dist_nm = 6880.13 * math.asin(min(1.0, math.sqrt(h)))
-        num_samples = max(12, int(dist_nm * 1.5))
+        num_samples = max(25, int(dist_nm * 2.5))
 
-    for i in range(1, num_samples):
-        t = i / num_samples
+    for i in range(num_samples + 1):
+        t = i / float(num_samples)
         lat = p1[0] + (p2[0] - p1[0]) * t
         lon = p1[1] + (p2[1] - p1[1]) * t
         if is_land(lat, lon):

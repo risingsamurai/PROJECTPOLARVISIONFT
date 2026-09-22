@@ -86,35 +86,28 @@ def run() -> dict:
                 lons_2d = ds['longitude'].values
             elif 'x' in ds.coords and 'y' in ds.coords:
                 xx, yy = np.meshgrid(ds['x'].values, ds['y'].values)
-                try:
-                    import pyproj
-                    proj_in = pyproj.Proj("+proj=stere +lat_0=-90 +lat_ts=-70 +lon_0=0 +k=1 +x_0=0 +y_0=0 +a=6378273 +b=6356889.449 +units=m +no_defs")
-                    proj_out = pyproj.Proj("+proj=longlat +datum=WGS84")
-                    transformer = pyproj.Transformer.from_proj(proj_in, proj_out)
-                    lons_2d, lats_2d = transformer.transform(xx, yy)
-                except (ImportError, OSError):
-                    # Pure numpy inverse polar stereographic projection (Hughes 1980 / EPSG:3412)
-                    a = 6378273.0
-                    b = 6356889.449
-                    e2 = 1.0 - (b * b) / (a * a)
-                    e = np.sqrt(e2)
-                    phi_c = np.radians(70.0)
-                    sin_phi_c = np.sin(phi_c)
-                    m_c = np.cos(phi_c) / np.sqrt(1.0 - e2 * sin_phi_c * sin_phi_c)
-                    t_c = np.tan(np.pi / 4.0 - phi_c / 2.0) / ((1.0 - e * sin_phi_c) / (1.0 + e * sin_phi_c)) ** (e / 2.0)
-                    rho = np.hypot(xx, yy)
-                    # avoid divide-by-zero at pole
-                    safe_rho = np.where(rho == 0, 1e-10, rho)
-                    t = safe_rho * t_c / (a * m_c)
-                    chi = np.pi / 2.0 - 2.0 * np.arctan(t)
-                    lat_rad = -(
-                        chi
-                        + (e2 / 2.0 + 5.0 * e2**2 / 24.0 + e2**3 / 12.0) * np.sin(2.0 * chi)
-                        + (7.0 * e2**2 / 48.0 + 29.0 * e2**3 / 240.0) * np.sin(4.0 * chi)
-                        + (7.0 * e2**3 / 120.0) * np.sin(6.0 * chi)
-                    )
-                    lons_2d = np.degrees(np.arctan2(xx, -yy))
-                    lats_2d = np.where(rho == 0, -90.0, np.degrees(lat_rad))
+                # Pure numpy inverse polar stereographic projection (Hughes 1980 / EPSG:3412)
+                # Avoids pyproj / _context.cp312-win_amd64.pyd native DLL failures on Windows AppLocker/WDAC
+                a = 6378273.0
+                b = 6356889.449
+                e2 = 1.0 - (b * b) / (a * a)
+                e = np.sqrt(e2)
+                phi_c = np.radians(70.0)
+                sin_phi_c = np.sin(phi_c)
+                m_c = np.cos(phi_c) / np.sqrt(1.0 - e2 * sin_phi_c * sin_phi_c)
+                t_c = np.tan(np.pi / 4.0 - phi_c / 2.0) / ((1.0 - e * sin_phi_c) / (1.0 + e * sin_phi_c)) ** (e / 2.0)
+                rho = np.hypot(xx, yy)
+                safe_rho = np.where(rho == 0, 1e-10, rho)
+                t = safe_rho * t_c / (a * m_c)
+                chi = np.pi / 2.0 - 2.0 * np.arctan(t)
+                lat_rad = -(
+                    chi
+                    + (e2 / 2.0 + 5.0 * e2**2 / 24.0 + e2**3 / 12.0) * np.sin(2.0 * chi)
+                    + (7.0 * e2**2 / 48.0 + 29.0 * e2**3 / 240.0) * np.sin(4.0 * chi)
+                    + (7.0 * e2**3 / 120.0) * np.sin(6.0 * chi)
+                )
+                lons_2d = np.degrees(np.arctan2(xx, yy))
+                lats_2d = np.where(rho == 0, -90.0, np.degrees(lat_rad))
             else:
                 raise RuntimeError("No coordinate variables found (latitude/longitude or x/y)")
             
