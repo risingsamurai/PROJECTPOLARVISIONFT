@@ -60,6 +60,7 @@ interface RouteOption {
 export default function HomePage() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const lastFittedRouteKeyRef = useRef<string>("");
 
   // States
   const [icebergs, setIcebergs] = useState<Iceberg[]>([]);
@@ -190,6 +191,7 @@ export default function HomePage() {
 
     map.on("load", () => {
       console.log("[MAP_ON_LOAD_START]");
+      map.resize();
       // Add source & layers for drawing zone
       map.addSource("drawing-polygon", {
         type: "geojson",
@@ -353,7 +355,26 @@ export default function HomePage() {
       setWarpToast({ lat, lon });
     });
 
+    const handleResize = () => {
+      if (mapRef.current) {
+        mapRef.current.resize();
+      }
+    };
+    window.addEventListener("resize", handleResize);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined" && mapContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        if (mapRef.current) {
+          mapRef.current.resize();
+        }
+      });
+      resizeObserver.observe(mapContainerRef.current);
+    }
+
     return () => {
+      window.removeEventListener("resize", handleResize);
+      resizeObserver?.disconnect();
       map.remove();
       mapRef.current = null;
     };
@@ -811,6 +832,45 @@ export default function HomePage() {
           console.error(`Error adding route layer for ${r.id}:`, err);
         }
       });
+
+      // Auto-fit bounds of all route profiles so the entire route is visible
+      let minLng = Infinity;
+      let maxLng = -Infinity;
+      let minLat = Infinity;
+      let maxLat = -Infinity;
+      let hasRoutePoints = false;
+
+      routes.forEach((r) => {
+        r.points?.forEach((p) => {
+          if (typeof p.lon === "number" && typeof p.lat === "number") {
+            hasRoutePoints = true;
+            if (p.lon < minLng) minLng = p.lon;
+            if (p.lon > maxLng) maxLng = p.lon;
+            if (p.lat < minLat) minLat = p.lat;
+            if (p.lat > maxLat) maxLat = p.lat;
+          }
+        });
+      });
+
+      if (hasRoutePoints && map) {
+        const currentRouteKey = routes
+          .map((r) => `${r.id}:${r.points?.length}:${r.distanceNm}`)
+          .join("|");
+        if (lastFittedRouteKeyRef.current !== currentRouteKey) {
+          lastFittedRouteKeyRef.current = currentRouteKey;
+          map.fitBounds(
+            [
+              [minLng, minLat],
+              [maxLng, maxLat],
+            ],
+            {
+              padding: { top: 90, bottom: 90, left: 100, right: 100 },
+              maxZoom: 7,
+              duration: 1000,
+            }
+          );
+        }
+      }
     };
 
     if (mapLoaded) {

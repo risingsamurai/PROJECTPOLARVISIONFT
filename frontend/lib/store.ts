@@ -141,12 +141,26 @@ const getInitialRoutes = (): { routes: RouteOption[]; endpoints: { start: [numbe
       const savedEndpoints = localStorage.getItem("polaris_route_endpoints");
       if (savedRoutes) {
         const parsedRoutes = JSON.parse(savedRoutes);
+        const parsedEndpoints = savedEndpoints ? JSON.parse(savedEndpoints) : null;
         if (Array.isArray(parsedRoutes) && parsedRoutes.length > 0) {
-          return {
-            routes: parsedRoutes,
-            endpoints: savedEndpoints ? JSON.parse(savedEndpoints) : null,
-            fetched: true,
-          };
+          const firstPt = parsedRoutes[0]?.points?.[0];
+          const lastPt = parsedRoutes[0]?.points?.[parsedRoutes[0].points.length - 1];
+          // Ensure endpoints match the actual waypoints in the saved route
+          if (
+            parsedEndpoints &&
+            firstPt &&
+            lastPt &&
+            Math.abs(parsedEndpoints.start[0] - firstPt.lat) < 0.05 &&
+            Math.abs(parsedEndpoints.start[1] - firstPt.lon) < 0.05 &&
+            Math.abs(parsedEndpoints.dest[0] - lastPt.lat) < 0.05 &&
+            Math.abs(parsedEndpoints.dest[1] - lastPt.lon) < 0.05
+          ) {
+            return {
+              routes: parsedRoutes,
+              endpoints: parsedEndpoints,
+              fetched: true,
+            };
+          }
         }
       }
     } catch {}
@@ -265,23 +279,35 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
     const { routes, routeEndpoints, routesFetched } = get();
     const isSameStart =
       routeEndpoints &&
-      Math.abs(routeEndpoints.start[0] - start[0]) < 1e-4 &&
-      Math.abs(routeEndpoints.start[1] - start[1]) < 1e-4;
+      Math.abs(routeEndpoints.start[0] - start[0]) < 0.01 &&
+      Math.abs(routeEndpoints.start[1] - start[1]) < 0.01;
     const isSameDest =
       routeEndpoints &&
-      Math.abs(routeEndpoints.dest[0] - dest[0]) < 1e-4 &&
-      Math.abs(routeEndpoints.dest[1] - dest[1]) < 1e-4;
+      Math.abs(routeEndpoints.dest[0] - dest[0]) < 0.01 &&
+      Math.abs(routeEndpoints.dest[1] - dest[1]) < 0.01;
 
-    if (!force && routesFetched && routes.length > 0 && isSameStart && isSameDest) {
+    // Additionally verify that the actual waypoints in the cached route match the requested start & dest
+    const firstPt = routes && routes.length > 0 && routes[0]?.points?.[0];
+    const lastPt = routes && routes.length > 0 && routes[0]?.points?.[routes[0].points.length - 1];
+    const waypointsMatch =
+      firstPt &&
+      lastPt &&
+      Math.abs(firstPt.lat - start[0]) < 0.05 &&
+      Math.abs(firstPt.lon - start[1]) < 0.05 &&
+      Math.abs(lastPt.lat - dest[0]) < 0.05 &&
+      Math.abs(lastPt.lon - dest[1]) < 0.05;
+
+    // Only reuse cached routes if NOT forced, already fetched, and endpoints + waypoints match requested coordinates
+    if (!force && routesFetched && routes && routes.length > 0 && isSameStart && isSameDest && waypointsMatch) {
       return routes;
     }
 
     const inFlightSame =
       inFlightCoords &&
-      Math.abs(inFlightCoords.start[0] - start[0]) < 1e-4 &&
-      Math.abs(inFlightCoords.start[1] - start[1]) < 1e-4 &&
-      Math.abs(inFlightCoords.dest[0] - dest[0]) < 1e-4 &&
-      Math.abs(inFlightCoords.dest[1] - dest[1]) < 1e-4;
+      Math.abs(inFlightCoords.start[0] - start[0]) < 0.01 &&
+      Math.abs(inFlightCoords.start[1] - start[1]) < 0.01 &&
+      Math.abs(inFlightCoords.dest[0] - dest[0]) < 0.01 &&
+      Math.abs(inFlightCoords.dest[1] - dest[1]) < 0.01;
 
     if (!force && inFlightRoutePromise && inFlightSame) {
       return inFlightRoutePromise;
@@ -345,7 +371,21 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
         inFlightRoutePromise = null;
         inFlightCoords = null;
       }
-      return get().routes;
+      // If fresh fetch failed and existing routes don't match, do NOT return a mismatched route
+      const currentRoutes = get().routes;
+      const curFirst = currentRoutes?.[0]?.points?.[0];
+      const curLast = currentRoutes?.[0]?.points?.[currentRoutes[0].points.length - 1];
+      if (
+        curFirst &&
+        curLast &&
+        Math.abs(curFirst.lat - start[0]) < 0.05 &&
+        Math.abs(curFirst.lon - start[1]) < 0.05 &&
+        Math.abs(curLast.lat - dest[0]) < 0.05 &&
+        Math.abs(curLast.lon - dest[1]) < 0.05
+      ) {
+        return currentRoutes;
+      }
+      return [];
     })();
 
     return inFlightRoutePromise;
@@ -392,12 +432,26 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
       allIcebergs: s.allIcebergs.length === 0 && icebergs.length > 0 ? icebergs : s.allIcebergs,
     })),
   setRoutes: (routes) => {
+    let endpoints: { start: [number, number]; dest: [number, number] } | null = null;
+    if (routes && routes.length > 0 && routes[0]?.points && routes[0].points.length >= 2) {
+      const p0 = routes[0].points[0];
+      const pN = routes[0].points[routes[0].points.length - 1];
+      endpoints = { start: [p0.lat, p0.lon], dest: [pN.lat, pN.lon] };
+    }
     if (typeof window !== "undefined") {
       try {
         localStorage.setItem("polaris_routes", JSON.stringify(routes));
+        if (endpoints) {
+          localStorage.setItem("polaris_route_endpoints", JSON.stringify(endpoints));
+        }
       } catch {}
     }
-    set({ routes, sharedRoutes: routes });
+    set((s) => ({
+      routes,
+      sharedRoutes: routes,
+      routeEndpoints: endpoints || s.routeEndpoints,
+      routesFetched: routes.length > 0,
+    }));
   },
   setAutoMode: (v) => set({ autoMode: v }),
   setSoundOn: (v) => set({ soundOn: v }),
@@ -490,7 +544,26 @@ if (typeof window !== "undefined") {
       try {
         const routes = JSON.parse(e.newValue);
         if (Array.isArray(routes) && routes.length > 0) {
-          usePolarisStore.setState({ routes, sharedRoutes: routes, routesFetched: true });
+          let endpoints = null;
+          const p0 = routes[0]?.points?.[0];
+          const pN = routes[0]?.points?.[routes[0].points.length - 1];
+          if (p0 && pN) {
+            endpoints = { start: [p0.lat, p0.lon] as [number, number], dest: [pN.lat, pN.lon] as [number, number] };
+          }
+          usePolarisStore.setState((s) => ({
+            routes,
+            sharedRoutes: routes,
+            routesFetched: true,
+            routeEndpoints: endpoints || s.routeEndpoints,
+          }));
+        }
+      } catch {}
+    }
+    if (e.key === "polaris_route_endpoints" && e.newValue) {
+      try {
+        const endpoints = JSON.parse(e.newValue);
+        if (endpoints && endpoints.start && endpoints.dest) {
+          usePolarisStore.setState({ routeEndpoints: endpoints });
         }
       } catch {}
     }

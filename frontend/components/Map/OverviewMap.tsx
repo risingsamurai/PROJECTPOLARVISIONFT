@@ -117,12 +117,37 @@ export function OverviewMap() {
               });
             }
           });
+
+          // Auto-fit bounds across all route points
+          let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+          let count = 0;
+          data.routes.forEach((r: { points: { lon: number; lat: number }[] }) => {
+            r.points?.forEach((p) => {
+              count++;
+              if (p.lon < minLng) minLng = p.lon;
+              if (p.lon > maxLng) maxLng = p.lon;
+              if (p.lat < minLat) minLat = p.lat;
+              if (p.lat > maxLat) maxLat = p.lat;
+            });
+          });
+          if (count > 0) {
+            map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+              padding: 80,
+              maxZoom: 7,
+              duration: 1000,
+            });
+          }
         }
       } catch {
         /* ignore */
       }
     });
+
+    const handleResize = () => mapRef.current?.resize();
+    window.addEventListener("resize", handleResize);
+
     return () => {
+      window.removeEventListener("resize", handleResize);
       map.remove();
       mapRef.current = null;
     };
