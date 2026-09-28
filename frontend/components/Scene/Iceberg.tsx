@@ -8,38 +8,47 @@ import type { Iceberg } from "@/lib/mockData";
 import { latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 
-// Procedural multi-faceted low-poly iceberg geometry
-function createIcebergGeometry(seed: number, sizeClass: string, scale: number) {
-  // Tabular or Pinnacle iceberg based on seed
-  const isTabular = (seed % 2) === 0;
-  let geo: THREE.BufferGeometry;
-
-  if (isTabular) {
-    geo = new THREE.CylinderGeometry(scale * 1.2, scale * 1.5, scale * 1.2, 7, 2);
-  } else {
-    geo = new THREE.DodecahedronGeometry(scale * 1.4, 1);
+// Procedural solid, closed, chunky low-poly iceberg geometry
+function createIcebergGeometry(id: string, scale: number) {
+  // Stable integer seed derived from iceberg ID string
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash << 5) - hash + id.charCodeAt(i);
+    hash |= 0;
   }
+  const seed = Math.abs(hash);
 
+  // Closed low-poly Icosahedron (detail 1: 80 triangles, clean faceted volume)
+  const geo = new THREE.IcosahedronGeometry(scale, 1);
   const pos = geo.attributes.position;
-  const rng = (n: number) => {
-    const x = Math.sin(seed * 78.233 + n * 12.9898) * 43758.5453;
-    return x - Math.floor(x);
+
+  const pseudoRng = (n: number) => {
+    const v = Math.sin(seed * 12.9898 + n * 78.233) * 43758.5453123;
+    return v - Math.floor(v);
   };
 
+  // Displace vertices non-uniformly into a solid, wide, blocky iceberg formation
   for (let i = 0; i < pos.count; i++) {
-    const px = pos.getX(i);
-    const py = pos.getY(i);
-    const pz = pos.getZ(i);
+    let px = pos.getX(i);
+    let py = pos.getY(i);
+    let pz = pos.getZ(i);
 
-    const noise = (rng(i) - 0.5) * 0.55;
-    const heightFactor = py > 0 ? 1.0 + rng(i + 2) * 0.4 : 0.8;
+    // Non-uniform aspect ratio: wider than tall (scale X and Z by 1.25)
+    px *= 1.25;
+    pz *= 1.25;
 
-    pos.setXYZ(
-      i,
-      px * (1 + noise * 0.45),
-      py * heightFactor + noise * scale * 0.3,
-      pz * (1 + noise * 0.45)
-    );
+    // Stable radial noise variation
+    const noise = (pseudoRng(i) - 0.5) * 0.45;
+    const radial = 1.0 + noise;
+
+    // Distribute bulk volume above waterline as a blocky chunk with a stable base
+    if (py > 0) {
+      py = py * 0.95 + pseudoRng(i + 4) * scale * 0.35;
+    } else {
+      py = py * 0.5; // Flattened submerged base
+    }
+
+    pos.setXYZ(i, px * radial, py, pz * radial);
   }
 
   geo.computeVertexNormals();
@@ -54,12 +63,11 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
   const [x, , z] = latLonToScene(iceberg.lat, iceberg.lon);
 
   // Scaled for high visibility in scene, proportional to real size_nm
-  const baseScale = Math.max(2.2, 1.8 + iceberg.diameterNm * 1.4);
-  const seed = Math.abs(iceberg.lat * 100 + iceberg.lon * 10);
+  const baseScale = Math.max(2.4, 1.8 + (iceberg.diameterNm || 1) * 1.4);
 
   const geo = useMemo(
-    () => createIcebergGeometry(seed, iceberg.sizeClass, baseScale),
-    [seed, iceberg.sizeClass, baseScale]
+    () => createIcebergGeometry(iceberg.id, baseScale),
+    [iceberg.id, baseScale]
   );
 
   const pathPts = useMemo(() => {
@@ -72,7 +80,7 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
   useFrame(({ clock }) => {
     if (meshRef.current) {
       // Gentle ocean bobbing for icebergs
-      const t = clock.getElapsedTime() + seed;
+      const t = clock.getElapsedTime() + (iceberg.lat * 10);
       meshRef.current.position.y = baseScale * 0.35 + Math.sin(t * 0.8) * 0.08;
       meshRef.current.rotation.z = Math.sin(t * 0.5) * 0.015;
     }
@@ -80,7 +88,7 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
 
   return (
     <group position={[x, 0, z]}>
-      {/* 3D Iceberg Solid */}
+      {/* 3D Solid Closed Iceberg */}
       <mesh
         ref={meshRef}
         geometry={geo}
@@ -101,14 +109,12 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
         receiveShadow
       >
         <meshStandardMaterial
-          color={selected ? "#bae6fd" : "#e0f7fa"}
-          roughness={0.15}
-          metalness={0.1}
+          color={selected ? "#bae6fd" : "#f1f5f9"}
+          roughness={0.8}
+          metalness={0.04}
           flatShading
-          emissive={selected ? "#0284c7" : iceberg.highRisk ? "#38bdf8" : "#64748b"}
-          emissiveIntensity={selected ? 0.3 : iceberg.highRisk ? 0.12 : 0.04}
-          transparent
-          opacity={0.95}
+          emissive={selected ? "#0284c7" : iceberg.highRisk ? "#38bdf8" : "#0f172a"}
+          emissiveIntensity={selected ? 0.3 : iceberg.highRisk ? 0.1 : 0.02}
         />
       </mesh>
 
