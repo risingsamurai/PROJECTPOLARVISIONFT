@@ -14,7 +14,8 @@ interface LogEntry {
 
 function getBearingString(lat1: number, lon1: number, lat2: number, lon2: number): string {
   const dLat = lat2 - lat1;
-  const dLon = lon2 - lon1;
+  const meanLatRad = (((lat1 + lat2) / 2) * Math.PI) / 180;
+  const dLon = (lon2 - lon1) * Math.cos(meanLatRad);
   const angle = (Math.atan2(dLon, dLat) * 180) / Math.PI;
   const normalized = (angle + 360) % 360;
   const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];

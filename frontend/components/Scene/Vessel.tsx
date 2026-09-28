@@ -4,7 +4,7 @@ import { useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { selectLockedRoute, usePolarisStore } from "@/lib/store";
-import { headingToVector, latLonToScene, sceneToLatLon } from "@/lib/geo";
+import { haversineNm, headingToVector, latLonToScene, sceneToLatLon } from "@/lib/geo";
 import { getWaveHeightAt } from "./Ocean";
 
 // Animated expanding dual-trail foam wake
@@ -307,9 +307,7 @@ export function Vessel() {
 
     const nearest = icebergs.reduce(
       (acc, ib) => {
-        const dlat = ib.lat - lat;
-        const dlon = ib.lon - lon;
-        const d = Math.sqrt(dlat * dlat + dlon * dlon) * 60;
+        const d = haversineNm({ lat, lon }, ib);
         return d < acc.d ? { d, ib } : acc;
       },
       { d: 999, ib: icebergs[0] }
@@ -331,9 +329,7 @@ export function Vessel() {
       const isHighRisk = ib.highRisk || (ib.dangerRadiusNm && ib.dangerRadiusNm > 0);
       if (!isHighRisk) continue;
 
-      const dlat = ib.lat - lat;
-      const dlon = ib.lon - lon;
-      const distNm = Math.sqrt(dlat * dlat + dlon * dlon) * 60;
+      const distNm = haversineNm({ lat, lon }, ib);
       const dangerRadius = ib.dangerRadiusNm || 5;
 
       if (distNm <= dangerRadius) {

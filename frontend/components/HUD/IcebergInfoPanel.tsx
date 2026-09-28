@@ -2,6 +2,7 @@
 
 import { usePolarisStore } from "@/lib/store";
 import { useMemo } from "react";
+import { haversineNm } from "@/lib/geo";
 
 export function IcebergInfoPanel() {
   const id = usePolarisStore((s) => s.selectedIcebergId);
@@ -13,9 +14,7 @@ export function IcebergInfoPanel() {
   // Calculate distance from vessel to selected iceberg
   const distance = useMemo(() => {
     if (!iceberg || !vessel) return null;
-    const dlat = iceberg.lat - vessel.lat;
-    const dlon = iceberg.lon - vessel.lon;
-    const distanceNm = Math.sqrt(dlat * dlat + dlon * dlon) * 60;
+    const distanceNm = haversineNm(vessel, iceberg);
     return distanceNm.toFixed(2);
   }, [iceberg, vessel]);
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { usePolarisStore } from "./store";
 import { alertConfig } from "./alertConfig";
+import { haversineNm } from "./geo";
 
 export function useAlertEngine() {
   const vessel = usePolarisStore((s) => s.vessel);
@@ -45,9 +46,7 @@ export function useAlertEngine() {
       let minDistance = 999999;
 
       for (const ib of realIcebergs) {
-        const dlat = ib.lat - lat;
-        const dlon = ib.lon - lon;
-        const d = Math.sqrt(dlat * dlat + dlon * dlon) * 60; // NM distance
+        const d = haversineNm(vessel, ib);
         if (d < minDistance) {
           minDistance = d;
           closestBerg = ib;

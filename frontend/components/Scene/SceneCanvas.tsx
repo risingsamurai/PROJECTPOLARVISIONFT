@@ -147,32 +147,39 @@ export function SceneCanvas() {
         gl.setClearColor(0x5a6878);
       }}
     >
-      <ambientLight intensity={0.4} />
+      <ambientLight intensity={0.48} />
       <directionalLight
-        position={[80, 120, 30]}
-        intensity={1.2}
+        position={[110, 22, -75]}
+        intensity={1.25}
         castShadow
         color="#f0f9ff"
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
-        shadow-camera-near={0.5}
-        shadow-camera-far={500}
-        shadow-camera-left={-100}
-        shadow-camera-right={100}
-        shadow-camera-top={100}
-        shadow-camera-bottom={-100}
+        shadow-camera-near={1}
+        shadow-camera-far={600}
+        shadow-camera-left={-120}
+        shadow-camera-right={120}
+        shadow-camera-top={120}
+        shadow-camera-bottom={-120}
+        shadow-bias={-0.0003}
       />
-      <hemisphereLight args={["#e0f2fe", "#1e3a8a", 0.6]} />
+      <hemisphereLight args={["#e0f2fe", "#1e293b", 0.55]} />
       
-      {/* Sun Glow */}
-      <mesh position={[80, 120, 30]}>
-        <sphereGeometry args={[8, 32, 32]} />
-        <meshBasicMaterial color="#fef3c7" transparent opacity={0.3} />
-      </mesh>
-      <mesh position={[80, 120, 30]}>
-        <sphereGeometry args={[12, 32, 32]} />
-        <meshBasicMaterial color="#fde68a" transparent opacity={0.15} />
-      </mesh>
+      {/* Low Antarctic Sun Sprite & Cool Polar Atmospheric Halo */}
+      <group position={[110, 22, -75]}>
+        <mesh>
+          <sphereGeometry args={[4.5, 32, 32]} />
+          <meshBasicMaterial color="#ffffff" />
+        </mesh>
+        <mesh>
+          <sphereGeometry args={[9, 32, 32]} />
+          <meshBasicMaterial color="#e0f2fe" transparent opacity={0.35} />
+        </mesh>
+        <mesh>
+          <sphereGeometry args={[16, 32, 32]} />
+          <meshBasicMaterial color="#bae6fd" transparent opacity={0.15} />
+        </mesh>
+      </group>
       <ChaseCamera />
       <Ocean />
       <AntarcticLandmass />
