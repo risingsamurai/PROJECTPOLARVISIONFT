@@ -20,13 +20,21 @@ export interface RoutePoint {
   lon: number;
 }
 
+export interface FuelBreakdown {
+  baseMt: number;
+  iceAddedMt: number;
+  weatherAddedMt: number;
+}
+
 export interface RouteOption {
-  id: "safest" | "balanced" | "fastest";
+  id: "safest" | "balanced" | "eco" | "fastest";
   name: string;
   distanceNm: number;
   etaHours: number;
   fuelMt: number;
   riskScore: number;
+  avgSpeedKts?: number;
+  fuelBreakdown?: FuelBreakdown;
   points: RoutePoint[];
 }
 

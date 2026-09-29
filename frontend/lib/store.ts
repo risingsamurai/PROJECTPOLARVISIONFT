@@ -109,6 +109,14 @@ interface PolarisState {
   setAllIcebergs: (icebergs: Iceberg[]) => void;
   filterIcebergsAroundPosition: (lat: number, lon: number, radiusNm?: number) => void;
   warpShip: (lat: number, lon: number) => void;
+  seaIceHeatmap: {
+    opacity: number;
+    dataDate: string | null;
+    error: string | null;
+    loading: boolean;
+  };
+  setSeaIceHeatmapOpacity: (v: number) => void;
+  setSeaIceHeatmapMeta: (meta: { dataDate?: string | null; error?: string | null; loading?: boolean }) => void;
   cameraTargetCoord: [number, number] | null;
   setCameraTargetCoord: (coord: [number, number] | null) => void;
 }
@@ -126,7 +134,7 @@ const getInitialLockedRoute = (): RouteOption["id"] => {
   if (typeof window !== "undefined") {
     try {
       const saved = localStorage.getItem("polaris_locked_route");
-      if (saved === "safest" || saved === "balanced" || saved === "fastest") {
+      if (saved === "safest" || saved === "balanced" || saved === "eco" || saved === "fastest") {
         return saved;
       }
     } catch {}
@@ -482,6 +490,16 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setSharedRouteLastFetch: (timestamp) => set({ sharedRouteLastFetch: timestamp }),
   allIcebergs: [],
   setAllIcebergs: (allIcebergs) => set({ allIcebergs }),
+  seaIceHeatmap: {
+    opacity: 0.6,
+    dataDate: null,
+    error: null,
+    loading: false,
+  },
+  setSeaIceHeatmapOpacity: (v) =>
+    set((s) => ({ seaIceHeatmap: { ...s.seaIceHeatmap, opacity: v } })),
+  setSeaIceHeatmapMeta: (meta) =>
+    set((s) => ({ seaIceHeatmap: { ...s.seaIceHeatmap, ...meta } })),
   filterIcebergsAroundPosition: (lat, lon, radiusNm = 50) => {
     const { allIcebergs } = get();
     if (!allIcebergs || allIcebergs.length === 0) return;

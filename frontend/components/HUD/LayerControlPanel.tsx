@@ -14,6 +14,8 @@ const ITEMS: { key: keyof Layers; label: string }[] = [
 export function LayerControlPanel() {
   const layers = usePolarisStore((s) => s.layers);
   const toggle = usePolarisStore((s) => s.toggleLayer);
+  const seaIceHeatmap = usePolarisStore((s) => s.seaIceHeatmap);
+  const setOpacity = usePolarisStore((s) => s.setSeaIceHeatmapOpacity);
 
   return (
     <section className="hud-panel p-3.5 w-64 bg-black/40 backdrop-blur-md border border-white/10 rounded-xl text-white shadow-xl">
@@ -26,26 +28,65 @@ export function LayerControlPanel() {
           return (
             <li
               key={item.key}
-              className="flex items-center justify-between gap-3 text-xs"
+              className="flex flex-col gap-1"
             >
-              <span className="text-white/85 font-medium text-[11px]">
-                {item.label}
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={on}
-                onClick={() => toggle(item.key)}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  on ? "bg-cyan-500 shadow-sm shadow-cyan-500/50" : "bg-white/20"
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                    on ? "translate-x-4" : "translate-x-0"
+              <div className="flex items-center justify-between gap-3 text-xs">
+                <span className="text-white/85 font-medium text-[11px]">
+                  {item.label}
+                </span>
+                <button
+                  id={`layer-toggle-${item.key}`}
+                  type="button"
+                  role="switch"
+                  aria-checked={on}
+                  onClick={() => toggle(item.key)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    on ? "bg-cyan-500 shadow-sm shadow-cyan-500/50" : "bg-white/20"
                   }`}
-                />
-              </button>
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      on ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Opacity slider for Sea Ice Concentration layer */}
+              {item.key === "seaIce" && on && (
+                <div className="flex items-center gap-2 pl-1">
+                  <span className="text-[9px] text-white/40 w-10 shrink-0">Opacity</span>
+                  <input
+                    id="sic-opacity-slider-layer"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={seaIceHeatmap.opacity}
+                    onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                    className="w-full accent-cyan-400"
+                  />
+                  <span className="text-[9px] text-white/40 w-6 shrink-0 text-right">
+                    {Math.round(seaIceHeatmap.opacity * 100)}%
+                  </span>
+                </div>
+              )}
+
+              {/* Data date label under Sea Ice layer */}
+              {item.key === "seaIce" && on && seaIceHeatmap.dataDate && (
+                <div className="text-[9px] text-white/30 pl-1">
+                  Data: {new Date(seaIceHeatmap.dataDate).toLocaleDateString("en-GB", {
+                    day: "2-digit", month: "short", year: "numeric",
+                  })}
+                </div>
+              )}
+
+              {/* Error state under Sea Ice layer */}
+              {item.key === "seaIce" && on && seaIceHeatmap.error && (
+                <div className="text-[9px] text-red-400/80 pl-1">
+                  ⚠ Sea ice data unavailable
+                </div>
+              )}
             </li>
           );
         })}
@@ -53,4 +94,3 @@ export function LayerControlPanel() {
     </section>
   );
 }
-

@@ -12,7 +12,7 @@ from data.era5_fetcher import run as fetch_era5
 from data.nsidc_fetcher import run as fetch_nsidc
 from db.models import iceberg_count, init_db, upsert_icebergs
 from db.redis_cache import get_json, set_json
-from routers import alerts, health, ice, icebergs, routing, telemetry
+from routers import alerts, health, ice, icebergs, routing, telemetry, sea_ice_grid
 
 import os
 from dotenv import load_dotenv, find_dotenv
@@ -107,6 +107,15 @@ async def ingest_all() -> None:
             nsidc = await loop.run_in_executor(None, fetch_nsidc)
             print(f"[INGEST] NSIDC fetcher completed with status {nsidc.get('status')}")
             update_reality("nsidc", nsidc)
+            # Invalidate fuel model grid caches so fresh NSIDC data is picked up
+            try:
+                from ml.fuel_model import invalidate_grids
+                invalidate_grids()
+                # Also invalidate sea_ice_grid endpoint cache
+                from routers.sea_ice_grid import _GRID_CACHE
+                _GRID_CACHE.clear()
+            except Exception:
+                pass
         except Exception as e:
             print(f"[INGEST] NSIDC fetcher failed: {e}")
             update_reality(
@@ -169,6 +178,7 @@ app.include_router(health.router)
 app.include_router(ice.router, prefix="/api/ice", tags=["ice"])
 app.include_router(icebergs.router, prefix="/api/icebergs", tags=["icebergs"])
 app.include_router(routing.router, prefix="/api/route", tags=["routing"])
+app.include_router(sea_ice_grid.router, prefix="/api/sea-ice", tags=["sea-ice"])
 app.include_router(telemetry.router, tags=["telemetry"])
 
 

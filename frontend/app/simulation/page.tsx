@@ -19,7 +19,7 @@ import { RouteInfoPanel } from "@/components/HUD/RouteInfoPanel";
 import { ReasoningPanel } from "@/components/HUD/ReasoningPanel";
 import { ProximityFlashOverlay } from "@/components/HUD/ProximityFlashOverlay";
 import { TopBar } from "@/components/HUD/TopBar";
-import { fetchIcebergs } from "@/lib/api";
+import { fetchIcebergs, fetchDataStatus } from "@/lib/api";
 import { ALL_ICEBERGS } from "@/lib/mockData";
 import { usePolarisStore, type KeysDown } from "@/lib/store";
 
@@ -123,34 +123,31 @@ export default function SimulationPage() {
         setIcebergs(ALL_ICEBERGS);
       });
 
-    const API = process.env.NEXT_PUBLIC_API_URL ?? "";
-    fetch(`${API}/api/status`)
-      .then((res) => {
-        if (!res.ok) throw new Error("status fetch failed");
-        return res.json();
-      })
+    fetchDataStatus()
       .then((data) => {
-        console.log('Status API response:', data);
+        console.log('[DataReality] Status API response:', data);
+        const toDS = (s?: string) => (s === "LIVE" ? "LIVE" : "FALLBACK") as import("@/lib/store").DataStatus;
         setDataReality({
           nsidc: {
-            status: data.nsidc?.status ?? "FALLBACK",
-            lastLive: data.nsidc?.status === "LIVE" ? new Date().toISOString() : null,
-            reason: data.nsidc?.status === "FALLBACK" ? (data.nsidc?.error ?? "Unknown error") : null,
+            status: toDS(data.nsidc?.status),
+            lastLive: data.nsidc?.fetched_at ?? null,
+            reason: data.nsidc?.status !== "LIVE" ? (data.nsidc?.last_error ?? "No live data") : null,
           },
           byu: {
-            status: data.byu?.status ?? "FALLBACK",
-            lastLive: data.byu?.status === "LIVE" ? new Date().toISOString() : null,
-            reason: data.byu?.status === "FALLBACK" ? (data.byu?.error ?? "Unknown error") : null,
+            status: toDS(data.byu_nic?.status),
+            lastLive: data.byu_nic?.fetched_at ?? (data.byu_nic?.status === "LIVE" ? new Date().toISOString() : null),
+            reason: data.byu_nic?.status !== "LIVE" ? (data.byu_nic?.last_error ?? "No live data") : null,
           },
           era5: {
-            status: data.era5?.status ?? "FALLBACK",
-            lastLive: data.era5?.status === "LIVE" ? new Date().toISOString() : null,
-            reason: data.era5?.status === "FALLBACK" ? (data.era5?.error ?? "Unknown error") : null,
+            status: toDS(data.era5?.status),
+            lastLive: data.era5?.fetched_at ?? null,
+            reason: data.era5?.status !== "LIVE" ? (data.era5?.last_error ?? "No live data") : null,
           },
         });
       })
-      .catch((err) => console.error("Error fetching status in simulation:", err));
+      .catch((err) => console.error("Error fetching data status in simulation:", err));
 
+    const API = process.env.NEXT_PUBLIC_API_URL ?? "";
     fetch(`${API}/api/ice/current`)
       .then((res) => {
         if (!res.ok) throw new Error("current ice fetch failed");

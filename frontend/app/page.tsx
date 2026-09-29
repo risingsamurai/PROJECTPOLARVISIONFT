@@ -19,7 +19,7 @@ import {
   PenTool,
   Navigation,
 } from "lucide-react";
-import { fetchIcebergs, fetchRoutes } from "@/lib/api";
+import { fetchIcebergs, fetchRoutes, fetchDataStatus } from "@/lib/api";
 import { usePolarisStore } from "@/lib/store";
 import { AlertBanner } from "@/components/HUD/AlertBanner";
 import { AlertHistoryLog } from "@/components/HUD/AlertHistoryLog";
@@ -127,31 +127,28 @@ export default function HomePage() {
       .catch((err) => console.error("Error fetching current ice:", err));
 
     // 3. Fetch Data Reality Statuses
-    fetch(`${API}/api/status`)
-      .then((res) => {
-        if (!res.ok) throw new Error("status fetch failed");
-        return res.json();
-      })
+    fetchDataStatus()
       .then((data) => {
+        const toDS = (s?: string) => (s === "LIVE" ? "LIVE" : "FALLBACK") as import("@/lib/store").DataStatus;
         usePolarisStore.getState().setDataReality({
           nsidc: {
-            status: data.nsidc?.status ?? "FALLBACK",
+            status: toDS(data.nsidc?.status),
             lastLive: data.nsidc?.fetched_at ?? null,
-            reason: data.nsidc?.status === "FALLBACK" ? (data.nsidc?.error ?? "Unknown error") : null,
+            reason: data.nsidc?.status !== "LIVE" ? (data.nsidc?.last_error ?? "No live data") : null,
           },
           byu: {
-            status: data.byu?.status ?? "FALLBACK",
-            lastLive: data.byu?.status === "LIVE" ? new Date().toISOString() : null,
-            reason: data.byu?.status === "FALLBACK" ? (data.byu?.error ?? "Unknown error") : null,
+            status: toDS(data.byu_nic?.status),
+            lastLive: data.byu_nic?.fetched_at ?? (data.byu_nic?.status === "LIVE" ? new Date().toISOString() : null),
+            reason: data.byu_nic?.status !== "LIVE" ? (data.byu_nic?.last_error ?? "No live data") : null,
           },
           era5: {
-            status: data.era5?.status ?? "FALLBACK",
+            status: toDS(data.era5?.status),
             lastLive: data.era5?.fetched_at ?? null,
-            reason: data.era5?.status === "FALLBACK" ? (data.era5?.error ?? "Unknown error") : null,
+            reason: data.era5?.status !== "LIVE" ? (data.era5?.last_error ?? "No live data") : null,
           },
         });
       })
-      .catch((err) => console.error("Error fetching status:", err));
+      .catch((err) => console.error("Error fetching data status:", err));
 
     // 4. Fetch initial routes with shared cache (only fetches if not already loaded)
     fetchRoutesIfNeeded(startCoords, destCoords)

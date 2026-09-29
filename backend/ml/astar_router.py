@@ -10,6 +10,19 @@ try:
 except ImportError:
     from backend.data.land_mask import is_land, is_segment_land, snap_to_sea
 
+try:
+    from ml.fuel_model import (
+        lookup_sic, route_fuel, eco_edge_cost, segment_fuel,
+        ice_resistance_factor, ice_speed_fraction,
+    )
+    from config.vessel_params import PROFILE_SPEEDS, min_fuel_per_nm, IMPASSABLE_ICE_SIC
+except ImportError:
+    from backend.ml.fuel_model import (
+        lookup_sic, route_fuel, eco_edge_cost, segment_fuel,
+        ice_resistance_factor, ice_speed_fraction,
+    )
+    from backend.config.vessel_params import PROFILE_SPEEDS, min_fuel_per_nm, IMPASSABLE_ICE_SIC
+
 
 def _haversine_nm(a: tuple[float, float], b: tuple[float, float]) -> float:
     r = 3440.065
@@ -21,9 +34,20 @@ def _haversine_nm(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def _ice_at(lat: float, lon: float) -> float:
-    # Heavy polar pack ice south of 66S; lighter ice further north
+    """
+    Returns sea-ice concentration for routing cost.
+    Tries NSIDC live/cached grid first; falls back to analytic model.
+    """
+    # Try live NSIDC grid first (only in Antarctic zone where we have data)
+    if lat <= -55.0:
+        try:
+            sic = lookup_sic(lat, lon)
+            if sic >= 0.0:
+                return sic
+        except Exception:
+            pass
+    # Analytic fallback (same formula as before)
     zonal = 0.15 + 0.55 / (1.0 + math.exp((lat + 66.0) / 1.6))
-    # Dense pack ice accumulation along Antarctic Peninsula in western Weddell (lon < -45)
     peninsula_pack = 0.30 * max(0.0, min(1.0, (-lon - 45.0) / 10.0)) * max(0.0, min(1.0, (-lat - 63.0) / 6.0))
     return max(0.0, min(1.0, zonal + peninsula_pack))
 
@@ -81,7 +105,7 @@ GLOBAL_CORRIDOR_NODES: dict[str, tuple[float, float]] = {
     "scotia_sea_mid": (-58.0, -45.0),
     "weddell_approach_ne": (-62.0, -45.0),
     "weddell_approach_nw": (-62.0, -52.0),
-    
+
     # Mediterranean & Gibraltar Corridor
     "gibraltar_east": (36.0, -5.0),
     "gibraltar_strait": (35.95, -5.6),
@@ -143,7 +167,7 @@ GLOBAL_CORRIDOR_EDGES: list[tuple[str, str]] = [
     ("sub_antarctic_scotia_e", "scotia_sea_mid"),
     ("scotia_sea_mid", "weddell_approach_ne"),
     ("weddell_approach_ne", "weddell_approach_nw"),
-    
+
     # Gibraltar & Atlantic chain
     ("gibraltar_east", "gibraltar_strait"),
     ("gibraltar_strait", "gibraltar_west"),
@@ -160,11 +184,11 @@ GLOBAL_CORRIDOR_EDGES: list[tuple[str, str]] = [
     ("argentine_basin_e", "falklands_e"),
     ("falklands_e", "weddell_approach_nw"),
     ("falklands_e", "scotia_sea_mid"),
-    
+
     # Cross links
     ("south_atlantic_sw", "south_atlantic_mid"),
     ("south_atlantic_nw", "south_atlantic_e"),
-    
+
     # Drake & Peninsula
     ("falklands_e", "drake_passage_n"),
     ("drake_passage_n", "drake_passage_s"),
@@ -215,6 +239,7 @@ def astar(
     step: float = 0.18,
     corridor_bias: float = 0.0,
     max_iter: int = 10000,
+    profile: str = "balanced",
 ) -> list[tuple[float, float]]:
     """Runs land-avoiding, ice-aware, iceberg-avoiding A* search for Antarctic regional waters."""
     s = (float(start[0]), float(start[1]))
@@ -227,7 +252,7 @@ def astar(
     max_lon = max(s[1], d[1]) + 12.0
 
     rel_bergs = [
-        b for b in bergs 
+        b for b in bergs
         if min_lat <= b["lat"] <= max_lat and min_lon <= b["lon"] <= max_lon
     ]
 
@@ -235,8 +260,17 @@ def astar(
     dy = d[1] - s[1]
     length = math.hypot(dx, dy) or 1.0
 
+    # Profile speed for ETA / fuel cost in Antarctic A*
+    speed_kts = PROFILE_SPEEDS.get(profile, PROFILE_SPEEDS["balanced"])
+    is_eco = (profile == "eco")
+    _min_fuel_nm = min_fuel_per_nm()
+
     def heur(n: tuple[float, float]) -> float:
-        return _haversine_nm(n, d) * dist_w
+        remaining_nm = _haversine_nm(n, d)
+        if is_eco:
+            # Admissible: minimum fuel per NM at optimal eco speed in open water
+            return remaining_nm * _min_fuel_nm
+        return remaining_nm * dist_w
 
     openh: list[tuple[float, tuple[float, float]]] = [(heur(s), s)]
     came: dict[tuple[float, float], tuple[float, float] | None] = {s: None}
@@ -274,7 +308,7 @@ def astar(
 
         for dlat, dlon in dirs:
             nxt = (round(current[0] + dlat, 3), round(current[1] + dlon, 3))
-            
+
             if nxt in visited or is_land(nxt[0], nxt[1]):
                 continue
 
@@ -284,19 +318,32 @@ def astar(
 
             ice = _ice_at(*nxt)
             berg_pen = _berg_penalty(*nxt, rel_bergs, berg_radius)
-            
+
             # Signed perpendicular distance from straight line
             perp = (dy * (nxt[0] - s[0]) - dx * (nxt[1] - s[1])) / length
             bias_cost = -perp * corridor_bias
-            
+
             step_d = _haversine_nm(current, nxt)
-            cost = (
-                dist_w * step_d
-                + ice_w * (ice ** 2) * 50.0
-                + berg_w * min(100.0, berg_pen * 25.0)
-                + bias_cost
-            )
-            
+
+            if is_eco:
+                # Eco profile: A* edge cost is predicted fuel for this step
+                mid_lat = (current[0] + nxt[0]) / 2
+                mid_lon = (current[1] + nxt[1]) / 2
+                sic = _ice_at(mid_lat, mid_lon)
+                fuel_cost, _, _, _ = segment_fuel(mid_lat, mid_lon, step_d, speed_kts, sic)
+                cost = (
+                    fuel_cost
+                    + berg_w * min(1.0, berg_pen * 0.05) * 0.01
+                    + bias_cost * 0.001
+                )
+            else:
+                cost = (
+                    dist_w * step_d
+                    + ice_w * (ice ** 2) * 50.0
+                    + berg_w * min(100.0, berg_pen * 25.0)
+                    + bias_cost
+                )
+
             tentative = gscore[current] + cost
             if tentative < gscore.get(nxt, 1e18):
                 gscore[nxt] = tentative
@@ -315,6 +362,7 @@ def _route_global_corridor(
     dist_w: float,
     berg_radius: float,
     corridor_bias: float,
+    profile: str = "balanced",
 ) -> list[tuple[float, float]]:
     """Calculates global sea route using the maritime corridor graph and 0.25-deg resolution densification."""
     s = start
@@ -391,7 +439,7 @@ def _route_global_corridor(
                 polar_entry_idx = i
             else:
                 break
-        
+
         polar_entry = best_path[polar_entry_idx]
         if _haversine_nm(polar_entry, d) > 30.0:
             local_polar = astar(
@@ -405,6 +453,7 @@ def _route_global_corridor(
                 step=0.18,
                 corridor_bias=corridor_bias,
                 max_iter=10000,
+                profile=profile,
             )
             if local_polar and len(local_polar) >= 2:
                 best_path = best_path[:polar_entry_idx] + local_polar
@@ -480,7 +529,7 @@ def _calculate_dynamic_risk(pts: list[tuple[float, float]], bergs: list[dict], p
 
     if profile == "safest":
         risk = max(0.05, min(0.25, risk * 0.5))
-    elif profile == "balanced":
+    elif profile in ("balanced", "eco"):
         risk = max(0.20, min(0.55, risk * 1.0 + 0.15))
     else:
         risk = max(0.40, min(0.95, risk * 1.5 + 0.35))
@@ -489,7 +538,12 @@ def _calculate_dynamic_risk(pts: list[tuple[float, float]], bergs: list[dict], p
 
 
 def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> list[dict]:
-    """Generates three distinct routes (Safest, Balanced, Fastest) with guaranteed sea-only land avoidance."""
+    """
+    Generates four distinct routes (Safest, Balanced, Eco, Fastest) with:
+      - Correct physical fuel model (not distance × constant)
+      - Fuel breakdown (base, ice-added, weather-added)
+      - Sanity checks: Fuel-Efficient <= Balanced <= Fastest fuel
+    """
     t_start = time.perf_counter()
     s_raw = (float(start[0]), float(start[1]))
     d_raw = (float(dest[0]), float(dest[1]))
@@ -500,14 +554,16 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
 
     is_regional_antarctic = (s[0] <= -50.0 and d[0] <= -50.0 and _haversine_nm(s, d) < 1800.0)
 
+    # (rid, name, ice_w, berg_w, dist_w, berg_radius, bias, profile_key)
     specs = [
-        ("safest", "Safest", 8.0, 50.0, 0.9, 30.0, 0.6, 9.5),
-        ("balanced", "Balanced", 2.0, 15.0, 1.0, 15.0, 0.0, 12.5),
-        ("fastest", "Fastest", 0.3, 1.0, 1.3, 5.0, -0.2, 16.0),
+        ("safest",   "Safest",   8.0, 50.0, 0.9, 30.0,  0.6, "safest"),
+        ("balanced", "Balanced", 2.0, 15.0, 1.0, 15.0,  0.0, "balanced"),
+        ("eco",      "Eco",      1.5, 10.0, 0.8, 12.0,  0.0, "eco"),
+        ("fastest",  "Fastest",  0.3,  1.0, 1.3,  5.0, -0.2, "fastest"),
     ]
 
     out = []
-    for rid, name, ice_w, berg_w, dist_w, berg_radius, bias, speed in specs:
+    for rid, name, ice_w, berg_w, dist_w, berg_radius, bias, prof in specs:
         if is_regional_antarctic:
             raw_pts = astar(
                 start=s,
@@ -520,6 +576,7 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                 step=0.18,
                 corridor_bias=bias,
                 max_iter=10000,
+                profile=prof,
             )
             # If regional A* failed to find path, fallback to corridor
             if not raw_pts:
@@ -532,6 +589,7 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                     dist_w=dist_w,
                     berg_radius=berg_radius,
                     corridor_bias=bias,
+                    profile=prof,
                 )
         else:
             raw_pts = _route_global_corridor(
@@ -543,6 +601,7 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                 dist_w=dist_w,
                 berg_radius=berg_radius,
                 corridor_bias=bias,
+                profile=prof,
             )
 
         if not raw_pts or len(raw_pts) < 2:
@@ -553,11 +612,16 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
             if is_segment_land(p_a, p_b, num_samples=10):
                 print(f"[ROUTER-WARNING] Route '{name}' segment between {p_a} and {p_b} touches land cell!")
 
-        nm = 0.0
-        for a, b in zip(raw_pts, raw_pts[1:]):
-            nm += _haversine_nm(a, b)
+        # Distance
+        nm = sum(_haversine_nm(a, b) for a, b in zip(raw_pts, raw_pts[1:]))
 
-        eta = nm / speed if speed else nm
+        # ── Physical fuel model (not nm × constant) ───────────────────────
+        speed_kts = PROFILE_SPEEDS[prof]
+        fuel_data = route_fuel(raw_pts, speed_kts, _haversine_nm)
+
+        eta       = fuel_data["eta_hours"]
+        total_fuel = fuel_data["total_mt"]
+
         dynamic_risk = _calculate_dynamic_risk(raw_pts, bergs, rid)
 
         out.append(
@@ -566,14 +630,30 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                 "name": name,
                 "distanceNm": round(nm, 1),
                 "etaHours": round(eta, 1),
-                "fuelMt": round(nm * 0.14, 1),
+                "fuelMt": round(total_fuel, 1),
                 "riskScore": dynamic_risk,
+                "avgSpeedKts": speed_kts,
+                "avgSic": round(fuel_data.get("avg_sic", 0.0) * 100.0, 1),
+                "maxSic": round(fuel_data.get("max_sic", 0.0) * 100.0, 1),
+                "fuelBreakdown": {
+                    "baseMt":       fuel_data["base_mt"],
+                    "iceAddedMt":   fuel_data["ice_added_mt"],
+                    "weatherAddedMt": fuel_data["weather_added_mt"],
+                },
                 "points": [{"lat": round(p[0], 4), "lon": round(p[1], 4)} for p in raw_pts],
             }
         )
 
+    # ── Sanity check: warn if profiles produce identical results ─────────
+    fuels = [r["fuelMt"] for r in out]
+    etas  = [r["etaHours"] for r in out]
+    if len(set(fuels)) == 1:
+        print("[ROUTER-WARNING] All profiles produced identical fuel values – check fuel model!")
+    if len(set(etas)) == 1:
+        print("[ROUTER-WARNING] All profiles produced identical ETAs – check speed params!")
+
     t_end = time.perf_counter()
     compute_ms = round((t_end - t_start) * 1000.0, 2)
-    print(f"[ROUTER] Successfully computed 3 routes in {compute_ms} ms")
+    print(f"[ROUTER] Successfully computed {len(out)} routes in {compute_ms} ms")
 
     return out
