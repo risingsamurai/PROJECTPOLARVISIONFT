@@ -1,11 +1,19 @@
 import { create } from "zustand";
 import {
   ALL_ICEBERGS,
+  FALLBACK_COLONIES,
+  FALLBACK_FLOW_VECTORS,
+  FALLBACK_PLUMES,
   MOCK_ROUTES,
   MOCK_VESSEL,
+  generateFallbackFlowField,
+  type CurrentVector,
+  type FlowFieldData,
   type Iceberg,
+  type PlumeItem,
   type RouteOption,
   type VesselState,
+  type WildlifeColony,
 } from "./mockData";
 import { playProximityAlertSound } from "./audio";
 
@@ -24,6 +32,8 @@ export interface Layers {
   riskZones: boolean;
   route: boolean;
   vessel: boolean;
+  wildlife: boolean;
+  freshwaterPlume: boolean;
 }
 
 export interface KeysDown {
@@ -41,6 +51,11 @@ interface PolarisState {
   vessel: VesselState;
   icebergs: Iceberg[];
   selectedIcebergId: string | null;
+  colonies: WildlifeColony[];
+  selectedColonyId: string | null;
+  plumes: PlumeItem[];
+  flowVectors: CurrentVector[];
+  flowField: FlowFieldData | null;
   routes: RouteOption[];
   lockedRouteId: RouteOption["id"];
   routeVersion: number;
@@ -55,9 +70,16 @@ interface PolarisState {
     nsidc: DataSourceReality;
     byu: DataSourceReality;
     era5: DataSourceReality;
+    wildlife: DataSourceReality;
+    oceanSalinity: DataSourceReality;
   };
   setVessel: (partial: Partial<VesselState>) => void;
   selectIceberg: (id: string | null) => void;
+  selectColony: (id: string | null) => void;
+  setColonies: (colonies: WildlifeColony[]) => void;
+  setPlumes: (plumes: PlumeItem[]) => void;
+  setFlowVectors: (vectors: CurrentVector[]) => void;
+  setFlowField: (field: FlowFieldData) => void;
   toggleLayer: (key: keyof Layers) => void;
   setKey: (key: keyof KeysDown, down: boolean) => void;
   setCameraOrbiting: (v: boolean) => void;
@@ -89,7 +111,7 @@ interface PolarisState {
   triggerProximityAlert: (iceberg: { id: string; name: string }) => void;
   pushAlert: (tier: string, message: string) => void;
   pushDetection: (d: PolarisState["detections"][number]) => void;
-  setDataReality: (dataReality: PolarisState["dataReality"]) => void;
+  setDataReality: (dataReality: Partial<PolarisState["dataReality"]>) => void;
   routeEndpoints: { start: [number, number]; dest: [number, number] } | null;
   routesFetched: boolean;
   fetchRoutesIfNeeded: (
@@ -221,6 +243,11 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   vessel: getInitialVessel(),
   icebergs: [],
   selectedIcebergId: null,
+  colonies: FALLBACK_COLONIES,
+  selectedColonyId: null,
+  plumes: FALLBACK_PLUMES,
+  flowVectors: FALLBACK_FLOW_VECTORS,
+  flowField: generateFallbackFlowField(3),
   routes: initialRouteData.routes,
   lockedRouteId: getInitialLockedRoute(),
   routeVersion: 0,
@@ -233,6 +260,8 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
     riskZones: true,
     route: true,
     vessel: true,
+    wildlife: true,
+    freshwaterPlume: true,
   },
   keys: {
     w: false,
@@ -253,10 +282,17 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
     nsidc: fallback("Loading data status..."),
     byu: fallback("Loading data status..."),
     era5: fallback("Loading data status..."),
+    wildlife: fallback("SCAR / SO-GLOBEC census baseline"),
+    oceanSalinity: fallback("Copernicus Marine / WOA23 assimilation"),
   },
   setVessel: (partial) =>
     set((s) => ({ vessel: { ...s.vessel, ...partial } })),
   selectIceberg: (id) => set({ selectedIcebergId: id }),
+  selectColony: (id) => set({ selectedColonyId: id }),
+  setColonies: (colonies) => set({ colonies }),
+  setPlumes: (plumes) => set({ plumes }),
+  setFlowVectors: (flowVectors) => set({ flowVectors }),
+  setFlowField: (flowField) => set({ flowField }),
   toggleLayer: (key) =>
     set((s) => ({ layers: { ...s.layers, [key]: !s.layers[key] } })),
   setKey: (key, down) => set((s) => ({ keys: { ...s.keys, [key]: down } })),
@@ -477,7 +513,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
     }),
   pushDetection: (d) =>
     set((s) => ({ detections: [...s.detections.slice(-30), d] })),
-  setDataReality: (dataReality) => set({ dataReality }),
+  setDataReality: (dataReality) => set((s) => ({ dataReality: { ...s.dataReality, ...dataReality } })),
   setSharedRoutes: (routes) => set({ routes, sharedRoutes: routes }),
   setSharedRouteLastFetch: (timestamp) => set({ sharedRouteLastFetch: timestamp }),
   allIcebergs: [],

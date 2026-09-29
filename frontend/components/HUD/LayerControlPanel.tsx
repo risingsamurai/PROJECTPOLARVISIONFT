@@ -2,14 +2,17 @@
 
 import { usePolarisStore, type Layers } from "@/lib/store";
 
-const ITEMS: { key: keyof Layers; label: string }[] = [
+const ITEMS: { key: keyof Layers; label: string; color?: string }[] = [
   { key: "seaIce", label: "Sea Ice Concentration" },
   { key: "icebergs", label: "Icebergs (Detection)" },
   { key: "predictions", label: "Iceberg Predictions" },
   { key: "riskZones", label: "Risk Zones" },
   { key: "route", label: "Recommended Route" },
   { key: "vessel", label: "Vessel" },
+  { key: "wildlife", label: "Wildlife Impact", color: "teal" },
+  { key: "freshwaterPlume", label: "Freshwater / Meltwater", color: "cyan" },
 ];
+
 
 export function LayerControlPanel() {
   const layers = usePolarisStore((s) => s.layers);
@@ -37,7 +40,13 @@ export function LayerControlPanel() {
                 aria-checked={on}
                 onClick={() => toggle(item.key)}
                 className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  on ? "bg-cyan-500 shadow-sm shadow-cyan-500/50" : "bg-white/20"
+                  on
+                    ? item.color === "teal"
+                      ? "bg-teal-500 shadow-sm shadow-teal-500/50"
+                      : item.color === "cyan"
+                      ? "bg-cyan-400 shadow-sm shadow-cyan-400/50"
+                      : "bg-cyan-500 shadow-sm shadow-cyan-500/50"
+                    : "bg-white/20"
                 }`}
               >
                 <span

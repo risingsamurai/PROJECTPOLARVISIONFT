@@ -40,3 +40,43 @@ export async function evaluateAlert(lat: number, lon: number, sog: number, cog: 
   });
   return r.json();
 }
+
+export async function fetchWildlifeColonies() {
+  try {
+    const r = await fetch(`${API}/api/wildlife/colonies`);
+    if (!r.ok) throw new Error("wildlife fetch failed");
+    return (await r.json()) as { status: string; count: number; colonies: any[] };
+  } catch {
+    const { FALLBACK_COLONIES } = await import("./mockData");
+    return { status: "fallback", count: FALLBACK_COLONIES.length, colonies: FALLBACK_COLONIES };
+  }
+}
+
+export async function fetchDispersionPlume(day: number = 1) {
+  try {
+    const r = await fetch(`${API}/api/ocean/dispersion-plume?day=${day}`);
+    if (!r.ok) throw new Error("ocean plume fetch failed");
+    return await r.json();
+  } catch {
+    const { FALLBACK_PLUMES, FALLBACK_FLOW_VECTORS } = await import("./mockData");
+    return {
+      status: "fallback",
+      day,
+      timestamp: new Date().toISOString(),
+      plumes: FALLBACK_PLUMES,
+      flowVectors: FALLBACK_FLOW_VECTORS,
+    };
+  }
+}
+
+export async function fetchFlowField(day: number = 1) {
+  try {
+    const r = await fetch(`${API}/api/ocean/flow-field?day=${day}`);
+    if (!r.ok) throw new Error("ocean flow-field fetch failed");
+    return (await r.json()) as import("./mockData").FlowFieldData;
+  } catch {
+    const { generateFallbackFlowField } = await import("./mockData");
+    return generateFallbackFlowField(day);
+  }
+}
+
