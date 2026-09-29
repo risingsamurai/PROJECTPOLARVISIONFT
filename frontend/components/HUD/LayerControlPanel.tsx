@@ -59,6 +59,19 @@ export function LayerControlPanel() {
           );
         })}
       </ul>
+      <div className="mt-3 pt-3 border-t border-white/10 flex items-center justify-between text-xs">
+        <span className="text-white/85 font-medium text-[11px]">Graphics Quality</span>
+        <button
+          type="button"
+          onClick={() => {
+            const current = usePolarisStore.getState().graphicsQuality;
+            usePolarisStore.getState().setGraphicsQuality(current === "high" ? "low" : "high");
+          }}
+          className="px-2.5 py-1 text-[10px] font-mono font-bold tracking-wider rounded border border-white/20 bg-white/10 hover:bg-white/20 text-cyan-300 transition-colors"
+        >
+          {usePolarisStore((s) => s.graphicsQuality || "high").toUpperCase()}
+        </button>
+      </div>
     </section>
   );
 }

@@ -8,9 +8,9 @@ import { usePolarisStore } from "@/lib/store";
 import type { RouteOption } from "@/lib/mockData";
 
 const PROFILE_COLORS: Record<string, { main: string; bead: string; glow: string }> = {
-  safest: { main: "#22c55e", bead: "#4ade80", glow: "#10b981" },
+  safest: { main: "#0E7A3F", bead: "#0E7A3F", glow: "#0E7A3F" },
   balanced: { main: "#eab308", bead: "#fde047", glow: "#f59e0b" },
-  fastest: { main: "#ef4444", bead: "#f87171", glow: "#f43f5e" },
+  fastest: { main: "#9E1B1B", bead: "#9E1B1B", glow: "#9E1B1B" },
 };
 
 function SingleRouteLine({
@@ -90,8 +90,9 @@ function SingleRouteLine({
         <lineBasicMaterial
           color={colors.main}
           transparent
-          opacity={isSelected ? 0.95 : 0.28}
-          linewidth={isSelected ? 3 : 1}
+          opacity={route.id !== "balanced" ? 0.9 : (isSelected ? 0.95 : 0.28)}
+          linewidth={route.id !== "balanced" ? 3 : (isSelected ? 3 : 1)}
+          toneMapped={route.id !== "balanced" ? false : undefined}
         />
       </line>
 

@@ -107,6 +107,8 @@ interface PolarisState {
   setDestination: (d: { lat: number; lon: number }) => void;
   soundOn: boolean;
   setSoundOn: (v: boolean) => void;
+  graphicsQuality: "high" | "low";
+  setGraphicsQuality: (q: "high" | "low") => void;
   proximityFlashId: number;
   triggerProximityAlert: (iceberg: { id: string; name: string }) => void;
   pushAlert: (tier: string, message: string) => void;
@@ -491,6 +493,8 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   },
   setAutoMode: (v) => set({ autoMode: v }),
   setSoundOn: (v) => set({ soundOn: v }),
+  graphicsQuality: "high",
+  setGraphicsQuality: (q) => set({ graphicsQuality: q }),
   setForecastDay: (d) => set({ forecastDay: d }),
   setDestination: (d) => {
     if (typeof window !== "undefined") {

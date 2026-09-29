@@ -3,6 +3,7 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 import { DangerZones } from "./DangerZone";
@@ -11,6 +12,48 @@ import { Ocean } from "./Ocean";
 import { RouteLine } from "./RouteLine";
 import { Vessel } from "./Vessel";
 import { AntarcticLandmass } from "./AntarcticLandmass";
+
+function PanoramaEnvironment() {
+  const { scene, gl } = useThree();
+  const quality = usePolarisStore((s) => s.graphicsQuality || "high");
+
+  useEffect(() => {
+    let active = true;
+    const loader = new RGBELoader();
+    
+    loader.load(
+      "/hdri/antarctic_pano.hdr",
+      (hdrTexture) => {
+        if (!active) return;
+        hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
+        hdrTexture.encoding = THREE.sRGBEncoding;
+
+        const pmremGenerator = new THREE.PMREMGenerator(gl);
+        pmremGenerator.compileEquirectangularShader();
+        const envMap = pmremGenerator.fromEquirectangular(hdrTexture);
+
+        scene.environment = envMap.texture;
+        scene.background = hdrTexture;
+
+        gl.toneMapping = THREE.ACESFilmicToneMapping;
+        gl.toneMappingExposure = 0.85;
+        gl.shadowMap.enabled = quality === "high";
+
+        pmremGenerator.dispose();
+      },
+      undefined,
+      (err) => {
+        console.warn("Could not load HDR panorama, falling back to polar gradient sky:", err);
+      }
+    );
+
+    return () => {
+      active = false;
+    };
+  }, [scene, gl, quality]);
+
+  return null;
+}
 
 function ChaseCamera() {
   const { camera, gl } = useThree();
@@ -73,7 +116,6 @@ function ChaseCamera() {
       cameraTargetCoord,
     } = usePolarisStore.getState();
 
-    // Check if cameraTargetCoord or an iceberg is selected for camera targeting
     let targetPosition = { lat: vessel.lat, lon: vessel.lon };
     if (cameraTargetCoord) {
       targetPosition = { lat: cameraTargetCoord[0], lon: cameraTargetCoord[1] };
@@ -86,11 +128,9 @@ function ChaseCamera() {
     
     const [x, , z] = latLonToScene(targetPosition.lat, targetPosition.lon);
 
-    // Navigational heading: 0° is North (-Z), 90° is East (+X)
     const vesselHeadingRad = THREE.MathUtils.degToRad(vessel.headingDeg);
     const totalYaw = vesselHeadingRad + orbitYaw;
 
-    // Camera placed behind and above vessel
     const forwardX = Math.sin(totalYaw);
     const forwardZ = -Math.cos(totalYaw);
 
@@ -107,7 +147,6 @@ function ChaseCamera() {
       camera.position.lerp(targetPos, 0.1);
     }
 
-    // Look slightly ahead of the vessel at deck level
     const lookTarget = new THREE.Vector3(
       x + forwardX * 6,
       1.8,
@@ -119,18 +158,76 @@ function ChaseCamera() {
   return null;
 }
 
-function IceHeatPatch() {
+function IceFloeOverlays() {
   const on = usePolarisStore((s) => s.layers.seaIce);
   const day = usePolarisStore((s) => s.forecastDay);
   if (!on) return null;
-  const radius = 26 + day * 3.5;
-  const opacity = 0.14 + day * 0.03;
-  const color = day >= 6 ? "#ffffff" : day >= 4 ? "#93c5fd" : "#38bdf8";
+
+  const count = 16 + day * 4;
+  const floes = [
+    { x: -12, z: -18, scale: 6.2, rot: 0.4 },
+    { x: 18, z: -32, scale: 9.5, rot: 1.1 },
+    { x: 34, z: 12, scale: 7.8, rot: 2.3 },
+    { x: -45, z: 28, scale: 12.0, rot: 0.8 },
+    { x: 52, z: -48, scale: 8.4, rot: 1.7 },
+    { x: -28, z: -55, scale: 11.2, rot: 2.9 },
+    { x: 68, z: 35, scale: 7.0, rot: 0.2 },
+    { x: -62, z: -15, scale: 14.5, rot: 1.4 },
+    { x: 15, z: 62, scale: 8.8, rot: 2.1 },
+    { x: -75, z: 45, scale: 10.5, rot: 0.6 },
+    { x: 82, z: -22, scale: 13.0, rot: 1.9 },
+    { x: -38, z: 78, scale: 9.2, rot: 2.7 },
+    { x: 42, z: 85, scale: 11.8, rot: 0.5 },
+    { x: -88, z: -68, scale: 15.0, rot: 1.3 },
+    { x: 95, z: 52, scale: 8.1, rot: 2.4 },
+    { x: -55, z: -92, scale: 13.4, rot: 0.9 },
+  ];
+
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[18, 0.05, -12]}>
-      <circleGeometry args={[radius, 64]} />
-      <meshBasicMaterial color={color} transparent opacity={opacity} />
-    </mesh>
+    <group position={[0, 0.04, 0]}>
+      {floes.slice(0, Math.min(count, floes.length)).map((f, i) => (
+        <mesh
+          key={i}
+          position={[f.x, 0, f.z]}
+          rotation={[-Math.PI / 2, 0, f.rot]}
+        >
+          <cylinderGeometry args={[f.scale, f.scale * 1.05, 0.22, 32]} />
+          <meshStandardMaterial
+            color="#f8fafc"
+            roughness={0.8}
+            metalness={0.05}
+            transparent
+            opacity={0.9}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function DistantIslandsAndIceShelf() {
+  return (
+    <group>
+      {/* Distant Dark Rock Islands */}
+      <mesh position={[-380, 8, -450]} rotation={[0, 0.4, 0]}>
+        <coneGeometry args={[45, 38, 6]} />
+        <meshStandardMaterial color="#1e293b" roughness={0.9} flatShading />
+      </mesh>
+      <mesh position={[-290, 6, -490]} rotation={[0, 0.9, 0]}>
+        <coneGeometry args={[32, 28, 5]} />
+        <meshStandardMaterial color="#0f172a" roughness={0.9} flatShading />
+      </mesh>
+      <mesh position={[420, 10, -520]} rotation={[0, -0.6, 0]}>
+        <coneGeometry args={[55, 42, 7]} />
+        <meshStandardMaterial color="#1e293b" roughness={0.88} flatShading />
+      </mesh>
+
+      {/* Distant Low Ice Shelf on Horizon */}
+      <mesh position={[0, 3, -650]}>
+        <boxGeometry args={[1400, 14, 60]} />
+        <meshStandardMaterial color="#e2e8f0" roughness={0.75} metalness={0.04} />
+      </mesh>
+    </group>
   );
 }
 
@@ -138,52 +235,40 @@ export function SceneCanvas() {
   return (
     <Canvas
       camera={{ position: [0, 16, 32], fov: 52, near: 0.1, far: 3000 }}
+      dpr={typeof window !== "undefined" ? Math.min(2, window.devicePixelRatio) : 1}
       tabIndex={0}
       onPointerMissed={() => usePolarisStore.getState().selectIceberg(null)}
       gl={{ antialias: true, powerPreference: "high-performance" }}
-      style={{ width: "100%", height: "100%", background: "#5a6878" }}
+      style={{ width: "100%", height: "100%", background: "#1e293b" }}
       onCreated={({ scene, gl }) => {
-        scene.fog = new THREE.Fog(0x5a6878, 80, 2000);
-        gl.setClearColor(0x5a6878);
+        scene.fog = new THREE.FogExp2(0x3b4b5e, 0.0009);
+        gl.setClearColor(0x3b4b5e);
       }}
     >
-      <ambientLight intensity={0.48} />
+      <PanoramaEnvironment />
+      <ambientLight intensity={0.55} color="#dbeafe" />
       <directionalLight
-        position={[110, 22, -75]}
-        intensity={1.25}
+        position={[140, 18, -120]}
+        intensity={2.1}
         castShadow
-        color="#f0f9ff"
+        color="#ffedd5"
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
         shadow-camera-near={1}
-        shadow-camera-far={600}
-        shadow-camera-left={-120}
-        shadow-camera-right={120}
-        shadow-camera-top={120}
-        shadow-camera-bottom={-120}
+        shadow-camera-far={800}
+        shadow-camera-left={-160}
+        shadow-camera-right={160}
+        shadow-camera-top={160}
+        shadow-camera-bottom={-160}
         shadow-bias={-0.0003}
       />
-      <hemisphereLight args={["#e0f2fe", "#1e293b", 0.55]} />
-      
-      {/* Low Antarctic Sun Sprite & Cool Polar Atmospheric Halo */}
-      <group position={[110, 22, -75]}>
-        <mesh>
-          <sphereGeometry args={[4.5, 32, 32]} />
-          <meshBasicMaterial color="#ffffff" />
-        </mesh>
-        <mesh>
-          <sphereGeometry args={[9, 32, 32]} />
-          <meshBasicMaterial color="#e0f2fe" transparent opacity={0.35} />
-        </mesh>
-        <mesh>
-          <sphereGeometry args={[16, 32, 32]} />
-          <meshBasicMaterial color="#bae6fd" transparent opacity={0.15} />
-        </mesh>
-      </group>
+      <hemisphereLight args={["#bae6fd", "#0f172a", 0.72]} />
+
       <ChaseCamera />
       <Ocean />
       <AntarcticLandmass />
-      <IceHeatPatch />
+      <DistantIslandsAndIceShelf />
+      <IceFloeOverlays />
       <Vessel />
       <IcebergField />
       <DangerZones />
