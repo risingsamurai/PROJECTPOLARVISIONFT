@@ -46,12 +46,12 @@ export function AntarcticLandmass() {
 
       try {
         const geom = new THREE.ExtrudeGeometry(shape, {
-          depth: 7.0, // Height of Antarctic ice shelf/cliffs above waterline
+          depth: 22.0, // Towering height of Antarctic glacier ice cliffs above waterline
           bevelEnabled: true,
-          bevelSegments: 2,
-          steps: 1,
-          bevelSize: 0.4,
-          bevelThickness: 0.6,
+          bevelSegments: 3,
+          steps: 2,
+          bevelSize: 1.2,
+          bevelThickness: 1.5,
         });
         geoms.push(geom);
       } catch (err) {
@@ -65,21 +65,29 @@ export function AntarcticLandmass() {
   if (geometries.length === 0) return null;
 
   return (
-    <group rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.4, 0]}>
+    <group rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.6, 0]}>
       {geometries.map((geom, i) => (
-        <mesh
-          key={i}
-          geometry={geom}
-          castShadow
-          receiveShadow
-        >
-          <meshStandardMaterial
-            color="#e2e8f0"
-            roughness={0.78}
-            metalness={0.06}
-            flatShading
-          />
-        </mesh>
+        <group key={i}>
+          {/* Main Glacier Ice Cliff Structure */}
+          <mesh geometry={geom} castShadow receiveShadow>
+            <meshStandardMaterial
+              color="#e2e8f0"
+              roughness={0.65}
+              metalness={0.05}
+              flatShading
+              emissive="#0369a1"
+              emissiveIntensity={0.12}
+            />
+          </mesh>
+          {/* Frosty Blue-White Glacial Snow Top Accent */}
+          <mesh geometry={geom} position={[0, 0, 0.4]} scale={[1.002, 1.002, 1.0]}>
+            <meshStandardMaterial
+              color="#f8fafc"
+              roughness={0.88}
+              metalness={0.02}
+            />
+          </mesh>
+        </group>
       ))}
     </group>
   );

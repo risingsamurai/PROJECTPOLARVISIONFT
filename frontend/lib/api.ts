@@ -79,72 +79,42 @@ export async function evaluateAlert(lat: number, lon: number, sog: number, cog: 
   return r.json();
 }
 
-export interface SeaIceGridCell {
-  lat: number;
-  lon: number;
-  sic: number | null; // null = land / no-data
-  sic_pct?: number | null;
-}
-
-export interface SeaIceGridResponse {
-  date: string | null;
-  source: string;
-  bounds: { min_lat: number; max_lat: number; min_lon: number; max_lon: number };
-  width: number;
-  height: number;
-  resolution_deg: number;
-  stats: {
-    min: number;
-    max: number;
-    mean: number;
-    non_null_count: number;
-    total_cells?: number;
-  };
-  values?: (number | null)[];
-  cells: SeaIceGridCell[];
-  n_cells?: number;
-}
-
-export async function fetchSeaIceGrid(params?: {
-  min_lat?: number;
-  max_lat?: number;
-  min_lon?: number;
-  max_lon?: number;
-  res?: number;
-}): Promise<SeaIceGridResponse> {
-  const q = new URLSearchParams();
-  if (params?.min_lat !== undefined) q.set("min_lat", String(params.min_lat));
-  if (params?.max_lat !== undefined) q.set("max_lat", String(params.max_lat));
-  if (params?.min_lon !== undefined) q.set("min_lon", String(params.min_lon));
-  if (params?.max_lon !== undefined) q.set("max_lon", String(params.max_lon));
-  if (params?.res !== undefined) q.set("res", String(params.res));
-
-  const url = `${API_BASE}/api/sea-ice/grid${q.toString() ? "?" + q.toString() : ""}`;
-  const r = await fetch(url);
-  if (!r.ok) {
-    throw new Error(`sea_ice_data_unavailable: HTTP ${r.status}`);
+export async function fetchWildlifeColonies() {
+  try {
+    const r = await fetch(`${API}/api/wildlife/colonies`);
+    if (!r.ok) throw new Error("wildlife fetch failed");
+    return (await r.json()) as { status: string; count: number; colonies: any[] };
+  } catch {
+    const { FALLBACK_COLONIES } = await import("./mockData");
+    return { status: "fallback", count: FALLBACK_COLONIES.length, colonies: FALLBACK_COLONIES };
   }
-  const data = (await r.json()) as SeaIceGridResponse;
-  if (process.env.NODE_ENV === "development") {
-    console.log(`[SeaIceGrid] Loaded ${data.cells?.length ?? data.values?.length} cells for ${data.date} (${data.source})`);
-  }
-  return data;
 }
 
-export function getSeaIceImageUrl(params?: {
-  min_lat?: number;
-  max_lat?: number;
-  min_lon?: number;
-  max_lon?: number;
-  res?: number;
-  opacity?: number;
-}): string {
-  const q = new URLSearchParams();
-  if (params?.min_lat !== undefined) q.set("min_lat", String(params.min_lat));
-  if (params?.max_lat !== undefined) q.set("max_lat", String(params.max_lat));
-  if (params?.min_lon !== undefined) q.set("min_lon", String(params.min_lon));
-  if (params?.max_lon !== undefined) q.set("max_lon", String(params.max_lon));
-  if (params?.res !== undefined) q.set("res", String(params.res));
-  if (params?.opacity !== undefined) q.set("opacity", String(params.opacity));
-  return `${API_BASE}/api/sea-ice/image?${q.toString()}`;
+export async function fetchDispersionPlume(day: number = 1) {
+  try {
+    const r = await fetch(`${API}/api/ocean/dispersion-plume?day=${day}`);
+    if (!r.ok) throw new Error("ocean plume fetch failed");
+    return await r.json();
+  } catch {
+    const { FALLBACK_PLUMES, FALLBACK_FLOW_VECTORS } = await import("./mockData");
+    return {
+      status: "fallback",
+      day,
+      timestamp: new Date().toISOString(),
+      plumes: FALLBACK_PLUMES,
+      flowVectors: FALLBACK_FLOW_VECTORS,
+    };
+  }
 }
+
+export async function fetchFlowField(day: number = 1) {
+  try {
+    const r = await fetch(`${API}/api/ocean/flow-field?day=${day}`);
+    if (!r.ok) throw new Error("ocean flow-field fetch failed");
+    return (await r.json()) as import("./mockData").FlowFieldData;
+  } catch {
+    const { generateFallbackFlowField } = await import("./mockData");
+    return generateFallbackFlowField(day);
+  }
+}
+

@@ -8,51 +8,70 @@ import type { Iceberg } from "@/lib/mockData";
 import { latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 
-// Procedural solid, closed, chunky low-poly iceberg geometry
-function createIcebergGeometry(id: string, scale: number) {
-  // Stable integer seed derived from iceberg ID string
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = (hash << 5) - hash + id.charCodeAt(i);
-    hash |= 0;
-  }
-  const seed = Math.abs(hash);
+const hash = (x: number, y: number, z: number) => { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return h - Math.floor(h); };
+const sm = (t: number) => t * t * (3 - 2 * t);
+function vnoise(x: number, y: number, z: number) {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  const xf = sm(x - xi), yf = sm(y - yi), zf = sm(z - zi);
+  let r = 0;
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++)
+    r += (i ? xf : 1 - xf) * (j ? yf : 1 - yf) * (k ? zf : 1 - zf) * hash(xi + i, yi + j, zi + k);
+  return r;
+}
+function fbm(x: number, y: number, z: number, oct = 4) {
+  let a = 0.5, f = 1, s = 0;
+  for (let i = 0; i < oct; i++) { s += a * vnoise(x * f, y * f, z * f); f *= 2; a *= 0.5; }
+  return s;
+}
 
-  // Closed low-poly Icosahedron (detail 1: 80 triangles, clean faceted volume)
-  const geo = new THREE.IcosahedronGeometry(scale, 1);
-  const pos = geo.attributes.position;
+function createIcebergGeo({ radius = 1, height = 0.8, seed = 1 } = {}) {
+  const o = seed * 17.31;
+  const geo = new THREE.IcosahedronGeometry(1, 5);
+  const p = geo.attributes.position;
+  const v = new THREE.Vector3();
 
-  const pseudoRng = (n: number) => {
-    const v = Math.sin(seed * 12.9898 + n * 78.233) * 43758.5453123;
-    return v - Math.floor(v);
-  };
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p as THREE.BufferAttribute, i);
+    const y = v.y;
+    const len = Math.hypot(v.x, v.z) || 1e-6;
+    const hx = v.x / len, hz = v.z / len;
 
-  // Displace vertices non-uniformly into a solid, wide, blocky iceberg formation
-  for (let i = 0; i < pos.count; i++) {
-    let px = pos.getX(i);
-    let py = pos.getY(i);
-    let pz = pos.getZ(i);
+    const outline = 1 + 0.45 * (fbm(hx * 1.6 + o, hz * 1.6 + o, 0) - 0.5);
+    let rad = radius * outline * Math.sqrt(Math.max(0, 1 - Math.pow(Math.abs(y), 10)));
+    rad *= 1 + 0.22 * (fbm(hx * 5 + o, hz * 5 + o, y * 1.5) - 0.5);
 
-    // Non-uniform aspect ratio: wider than tall (scale X and Z by 1.25)
-    px *= 1.25;
-    pz *= 1.25;
-
-    // Stable radial noise variation
-    const noise = (pseudoRng(i) - 0.5) * 0.45;
-    const radial = 1.0 + noise;
-
-    // Distribute bulk volume above waterline as a blocky chunk with a stable base
-    if (py > 0) {
-      py = py * 0.95 + pseudoRng(i + 4) * scale * 0.35;
+    const px = hx * rad, pz = hz * rad;
+    let yw;
+    if (y >= 0) {
+      const ridge = 1 - Math.abs(2 * fbm(px * 0.22 + o, pz * 0.22 + o, 3.3, 5) - 1);
+      const peaks = Math.pow(ridge, 2.5) * 1.5 * (0.35 + 0.65 * (1 - Math.min(1, rad / radius)));
+      const ledge = Math.floor(y * 4) * 0.04;
+      yw = y * height * (0.35 + peaks) + ledge * height;
     } else {
-      py = py * 0.5; // Flattened submerged base
+      yw = y * height * 3.2 * (0.75 + 0.5 * fbm(px * 0.3 + o, pz * 0.3 + o, 7.1));
     }
-
-    pos.setXYZ(i, px * radial, py, pz * radial);
+    p.setXYZ(i, px, yw, pz);
   }
-
   geo.computeVertexNormals();
+
+  const n = geo.attributes.normal;
+  const col = new Float32Array(p.count * 3);
+  const snow = new THREE.Color("#f2f8ff"), ice = new THREE.Color("#7fa6c9"), deep = new THREE.Color("#3f86a8"), c = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const up = Math.max(0, (n as THREE.BufferAttribute).getY(i));
+    c.copy(ice).lerp(snow, Math.pow(up, 1.5));
+    if (p.getY(i) < 0) c.lerp(deep, Math.min(1, -p.getY(i) / (height * 1.5)));
+    col.set([c.r, c.g, c.b], i * 3);
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
   return geo;
+}
+
+const SHARED_GEOMETRIES: THREE.BufferGeometry[] = [];
+if (typeof window !== "undefined") {
+  for (let variant = 1; variant <= 6; variant++) {
+    SHARED_GEOMETRIES.push(createIcebergGeo({ radius: 1, height: 0.8, seed: variant }));
+  }
 }
 
 export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
@@ -62,13 +81,15 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
   const showPred = usePolarisStore((s) => s.layers.predictions);
   const [x, , z] = latLonToScene(iceberg.lat, iceberg.lon);
 
-  // Scaled for high visibility in scene, proportional to real size_nm
-  const baseScale = Math.max(2.4, 1.8 + (iceberg.diameterNm || 1) * 1.4);
+  const baseScale = Math.max(2.6, 2.0 + (iceberg.diameterNm || 1) * 1.5);
 
-  const geo = useMemo(
-    () => createIcebergGeometry(iceberg.id, baseScale),
-    [iceberg.id, baseScale]
-  );
+  const geoIndex = useMemo(() => {
+    let hash = 0;
+    for (let i = 0; i < iceberg.id.length; i++) hash += iceberg.id.charCodeAt(i);
+    return hash % 6;
+  }, [iceberg.id]);
+
+  const geo = SHARED_GEOMETRIES[geoIndex];
 
   const pathPts = useMemo(() => {
     return iceberg.predictedPath.map((p) => {
@@ -79,7 +100,6 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
 
   useFrame(({ clock }) => {
     if (meshRef.current) {
-      // Gentle ocean bobbing for icebergs
       const t = clock.getElapsedTime() + (iceberg.lat * 10);
       meshRef.current.position.y = baseScale * 0.35 + Math.sin(t * 0.8) * 0.08;
       meshRef.current.rotation.z = Math.sin(t * 0.5) * 0.015;
@@ -88,10 +108,11 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
 
   return (
     <group position={[x, 0, z]}>
-      {/* 3D Solid Closed Iceberg */}
+      {/* High-Detail Physical Iceberg Mesh */}
       <mesh
         ref={meshRef}
         geometry={geo}
+        scale={[baseScale, baseScale, baseScale]}
         position={[0, baseScale * 0.35, 0]}
         rotation={[0, (iceberg.headingDeg * Math.PI) / 180, 0]}
         onClick={(e) => {
@@ -108,20 +129,22 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
         castShadow
         receiveShadow
       >
-        <meshStandardMaterial
-          color={selected ? "#bae6fd" : "#f1f5f9"}
-          roughness={0.8}
-          metalness={0.04}
+        <meshPhysicalMaterial
+          vertexColors={true}
+          roughness={0.38}
+          metalness={0}
+          clearcoat={0.6}
+          clearcoatRoughness={0.3}
           flatShading
-          emissive={selected ? "#0284c7" : iceberg.highRisk ? "#38bdf8" : "#0f172a"}
-          emissiveIntensity={selected ? 0.3 : iceberg.highRisk ? 0.1 : 0.02}
+          emissive={selected ? "#0284c7" : iceberg.highRisk ? "#38bdf8" : "#000000"}
+          emissiveIntensity={selected ? 0.4 : iceberg.highRisk ? 0.25 : 0}
         />
       </mesh>
 
-      {/* Underwater Ice Mass Tint / Halo */}
-      <mesh position={[0, -0.3, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[baseScale * 1.35, 16]} />
-        <meshBasicMaterial color="#0ea5e9" transparent opacity={0.22} />
+      {/* Soft Foam Ring at Waterline */}
+      <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[baseScale * 1.4, 0.3, 8, 32]} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={0.35} />
       </mesh>
 
       {/* Selected Target Ring */}
@@ -158,8 +181,8 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
       )}
 
       {/* Floating Iceberg Label */}
-      <Html position={[0, baseScale * 1.2, 0]} center distanceFactor={15}>
-        <div className="px-2 py-1 bg-black/60 backdrop-blur-sm border border-white/20 rounded text-[10px] font-mono text-white/90 whitespace-nowrap">
+      <Html position={[0, baseScale * 1.25, 0]} center distanceFactor={15}>
+        <div className="px-2 py-1 bg-black/60 backdrop-blur-sm border border-white/20 rounded text-[10px] font-mono text-white/90 whitespace-nowrap shadow-lg">
           {iceberg.name}
         </div>
       </Html>
@@ -179,4 +202,3 @@ export function IcebergField() {
     </group>
   );
 }
-
