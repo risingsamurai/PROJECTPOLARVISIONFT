@@ -1,0 +1,46 @@
+--- frontend/components/Scene/Iceberg.tsx
++++ frontend/components/Scene/Iceberg.tsx
+@@ -25,9 +25,9 @@
+ }
+ 
+-function createIcebergGeo({ radius = 1, height = 0.8, seed = 1 } = {}) {
++export function createIceberg({ radius = 1, height = 0.8, seed = 1, detail = 5 } = {}) {
+   const o = seed * 17.31;
+-  const geo = new THREE.IcosahedronGeometry(1, 5);
++  const geo = new THREE.IcosahedronGeometry(1, detail);
+   const p = geo.attributes.position;
+   const v = new THREE.Vector3();
+@@ -68,9 +68,14 @@
+ 
+-const SHARED_GEOMETRIES: THREE.BufferGeometry[] = [];
++export const SHARED_GEOMETRIES: { geo: THREE.BufferGeometry, class: string }[] = [];
+ if (typeof window !== "undefined") {
+-  for (let variant = 1; variant <= 6; variant++) {
+-    SHARED_GEOMETRIES.push(createIcebergGeo({ radius: 1, height: 0.8, seed: variant }));
++  // We generate 8 distinct variants
++  for (let v = 1; v <= 3; v++) {
++    SHARED_GEOMETRIES.push({ geo: createIceberg({ radius: 1, height: 1.5, seed: v, detail: 5 }), class: 'small' });
++  }
++  for (let v = 4; v <= 6; v++) {
++    SHARED_GEOMETRIES.push({ geo: createIceberg({ radius: 1, height: 1.0, seed: v, detail: 5 }), class: 'medium' });
++  }
++  for (let v = 7; v <= 8; v++) {
++    SHARED_GEOMETRIES.push({ geo: createIceberg({ radius: 1, height: 0.5, seed: v, detail: 5 }), class: 'large' });
+   }
+ }
+@@ -84,10 +89,12 @@
+   const baseScale = Math.max(2.6, 2.0 + (iceberg.diameterNm || 1) * 1.5);
++  const sizeClass = baseScale > 6 ? 'large' : baseScale > 4 ? 'medium' : 'small';
+ 
+-  const geoIndex = useMemo(() => {
++  const geo = useMemo(() => {
+     let hash = 0;
+     for (let i = 0; i < iceberg.id.length; i++) hash += iceberg.id.charCodeAt(i);
+-    return hash % 6;
+-  }, [iceberg.id]);
+-
+-  const geo = SHARED_GEOMETRIES[geoIndex];
++    const valid = SHARED_GEOMETRIES.filter(g => g.class === sizeClass);
++    return valid[hash % valid.length].geo;
++  }, [iceberg.id, sizeClass]);
+ 

@@ -1,13 +1,13 @@
 "use client";
 
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 import { DangerZones } from "./DangerZone";
-import { IcebergField } from "./Iceberg";
+import { IcebergField, createIceberg, SHARED_GEOMETRIES, IcebergBodyLayers } from "./Iceberg";
 import { Ocean } from "./Ocean";
 import { RouteLine } from "./RouteLine";
 import { Vessel } from "./Vessel";
@@ -161,6 +161,7 @@ function ChaseCamera() {
 function IceFloeOverlays() {
   const on = usePolarisStore((s) => s.layers.seaIce);
   const day = usePolarisStore((s) => s.forecastDay);
+  const quality = usePolarisStore((s) => s.graphicsQuality || "high");
   if (!on) return null;
 
   const count = 16 + day * 4;
@@ -184,28 +185,49 @@ function IceFloeOverlays() {
   ];
 
   return (
-    <group position={[0, 0.04, 0]}>
-      {floes.slice(0, Math.min(count, floes.length)).map((f, i) => (
-        <mesh
-          key={i}
-          position={[f.x, 0, f.z]}
-          rotation={[-Math.PI / 2, 0, f.rot]}
-        >
-          <cylinderGeometry args={[f.scale, f.scale * 1.05, 0.22, 32]} />
-          <meshStandardMaterial
-            color="#f8fafc"
-            roughness={0.8}
-            metalness={0.05}
-            transparent
-            opacity={0.9}
-          />
-        </mesh>
-      ))}
+    <group position={[0, 0, 0]}>
+      {floes.slice(0, Math.min(count, floes.length)).map((f, i) => {
+        const list = quality === "low" ? SHARED_GEOMETRIES.low : SHARED_GEOMETRIES.high;
+        const spires = list.filter((g) => g.class === "spire");
+        const geo = spires[i % spires.length].geo;
+        const s = f.scale * 0.55;
+        return (
+          <group key={i} position={[f.x, 0, f.z]}>
+            <IcebergBodyLayers
+              geometry={geo}
+              scale={[s, f.scale * 1.4, s]}
+              rotation={[0, f.rot, 0]}
+              quality={quality}
+              footprint={1.38}
+              showEffects={false}
+            />
+          </group>
+        );
+      })}
     </group>
   );
 }
 
 function DistantIslandsAndIceShelf() {
+  const quality = usePolarisStore((s) => s.graphicsQuality || "high");
+  const shelfVariants = useMemo(() => {
+    const q = quality === "low" ? 3 : 5;
+    return [11, 12, 13, 14].map((seed) =>
+      createIceberg({ radius: 1, height: 0.16, seed, detail: q, kind: "shelf" })
+    );
+  }, [quality]);
+
+  const shelfSegments = useMemo(
+    () =>
+      Array.from({ length: 11 }, (_, i) => ({
+        x: -720 + i * 135,
+        seedIdx: i % shelfVariants.length,
+        rot: (i * 0.31) % (Math.PI * 2),
+        stretch: 0.92 + (i % 3) * 0.06,
+      })),
+    [shelfVariants.length]
+  );
+
   return (
     <group>
       {/* Distant Dark Rock Islands */}
@@ -223,10 +245,20 @@ function DistantIslandsAndIceShelf() {
       </mesh>
 
       {/* Distant Low Ice Shelf on Horizon */}
-      <mesh position={[0, 3, -650]}>
-        <boxGeometry args={[1400, 14, 60]} />
-        <meshStandardMaterial color="#e2e8f0" roughness={0.75} metalness={0.04} />
-      </mesh>
+      <group position={[0, 0, -650]}>
+        {shelfSegments.map((seg, i) => (
+          <group key={i} position={[seg.x, 0, (i % 2 === 0 ? 1 : -1) * 8]}>
+            <IcebergBodyLayers
+              geometry={shelfVariants[seg.seedIdx]}
+              scale={[128 * seg.stretch, 22, 118 * seg.stretch]}
+              rotation={[0, seg.rot, 0]}
+              quality={quality}
+              footprint={1.05}
+              showEffects={false}
+            />
+          </group>
+        ))}
+      </group>
     </group>
   );
 }
@@ -243,6 +275,7 @@ export function SceneCanvas() {
       onCreated={({ scene, gl }) => {
         scene.fog = new THREE.FogExp2(0x3b4b5e, 0.0009);
         gl.setClearColor(0x3b4b5e);
+        gl.localClippingEnabled = true;
       }}
     >
       <PanoramaEnvironment />
