@@ -86,6 +86,7 @@ interface PolarisState {
   setOrbit: (yaw: number, pitch: number, distance?: number) => void;
   recalculateRoute: () => void;
   lockRoute: (id: RouteOption["id"]) => void;
+  resetShipToRouteStart: () => void;
   tickTime: () => void;
   autoMode: boolean;
   forecastDay: number;
@@ -169,12 +170,18 @@ const getInitialLockedRoute = (): RouteOption["id"] => {
 const getInitialRoutes = (): { routes: RouteOption[]; endpoints: { start: [number, number]; dest: [number, number] } | null; fetched: boolean } => {
   if (typeof window !== "undefined") {
     try {
-      const savedRoutes = localStorage.getItem("polaris_routes");
-      const savedEndpoints = localStorage.getItem("polaris_route_endpoints");
+      // Clear legacy cache keys
+      localStorage.removeItem("polaris_routes");
+      localStorage.removeItem("polaris_routes_v3");
+      const savedRoutes = localStorage.getItem("polaris_routes_v4");
+      const savedEndpoints = localStorage.getItem("polaris_route_endpoints_v4");
       if (savedRoutes) {
         const parsedRoutes = JSON.parse(savedRoutes);
         const parsedEndpoints = savedEndpoints ? JSON.parse(savedEndpoints) : null;
-        if (Array.isArray(parsedRoutes) && parsedRoutes.length > 0) {
+        if (
+          Array.isArray(parsedRoutes) &&
+          parsedRoutes.length === 4
+        ) {
           const firstPt = parsedRoutes[0]?.points?.[0];
           const lastPt = parsedRoutes[0]?.points?.[parsedRoutes[0].points.length - 1];
           // Ensure endpoints match the actual waypoints in the saved route
@@ -200,6 +207,8 @@ const getInitialRoutes = (): { routes: RouteOption[]; endpoints: { start: [numbe
   return { routes: MOCK_ROUTES, endpoints: null, fetched: false };
 };
 
+const initialRouteData = getInitialRoutes();
+
 const getInitialVessel = (): VesselState => {
   if (typeof window !== "undefined") {
     try {
@@ -209,12 +218,19 @@ const getInitialVessel = (): VesselState => {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (typeof parsed.lat === "number" && typeof parsed.lon === "number") {
-          return { ...MOCK_VESSEL, lat: parsed.lat, lon: parsed.lon };
+          const startLat = initialRouteData.routes[0]?.points?.[0]?.lat ?? MOCK_VESSEL.lat;
+          const startLon = initialRouteData.routes[0]?.points?.[0]?.lon ?? MOCK_VESSEL.lon;
+          const distFromStart = Math.hypot(parsed.lat - startLat, (parsed.lon - startLon) * Math.cos(startLat * Math.PI / 180)) * 60;
+          if (distFromStart < 5.0) {
+            return { ...MOCK_VESSEL, lat: parsed.lat, lon: parsed.lon };
+          }
         }
       }
     } catch {}
   }
-  return { ...MOCK_VESSEL };
+  const defaultStartLat = initialRouteData.routes[0]?.points?.[0]?.lat ?? MOCK_VESSEL.lat;
+  const defaultStartLon = initialRouteData.routes[0]?.points?.[0]?.lon ?? MOCK_VESSEL.lon;
+  return { ...MOCK_VESSEL, lat: defaultStartLat, lon: defaultStartLon };
 };
 
 const getInitialWarpTarget = (): { lat: number; lon: number } | null => {
@@ -244,10 +260,8 @@ const getInitialDestination = (): { lat: number; lon: number } => {
       }
     } catch {}
   }
-  return { lat: -68.72, lon: -49.55 };
+  return { lat: -64.58, lon: -43.1 };
 };
-
-const initialRouteData = getInitialRoutes();
 
 export const usePolarisStore = create<PolarisState>((set, get) => ({
   vessel: getInitialVessel(),
@@ -321,6 +335,27 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
     }
     set({ lockedRouteId: id });
   },
+  resetShipToRouteStart: () => {
+    const { routes } = get();
+    if (routes && routes.length > 0 && routes[0]?.points?.[0]) {
+      const p0 = routes[0].points[0];
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem("polaris_vessel_pos", JSON.stringify({ lat: p0.lat, lon: p0.lon }));
+          localStorage.removeItem("polaris_warp_target");
+        } catch {}
+      }
+      set((s) => ({
+        warpTarget: null,
+        vessel: {
+          ...s.vessel,
+          lat: p0.lat,
+          lon: p0.lon,
+          sogKnots: 0,
+        },
+      }));
+    }
+  },
   fetchRoutesIfNeeded: async (start, dest, force = false) => {
     const { routes, routeEndpoints, routesFetched } = get();
     const isSameStart =
@@ -344,7 +379,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
       Math.abs(lastPt.lon - dest[1]) < 0.05;
 
     // Only reuse cached routes if NOT forced, already fetched, and endpoints + waypoints match requested coordinates
-    if (!force && routesFetched && routes && routes.length > 0 && isSameStart && isSameDest && waypointsMatch) {
+    if (!force && routesFetched && routes && routes.length === 4 && isSameStart && isSameDest && waypointsMatch) {
       return routes;
     }
 
@@ -374,8 +409,8 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
 
           if (typeof window !== "undefined") {
             try {
-              localStorage.setItem("polaris_routes", JSON.stringify(data.routes));
-              localStorage.setItem("polaris_route_endpoints", JSON.stringify({ start, dest }));
+              localStorage.setItem("polaris_routes_v4", JSON.stringify(data.routes));
+              localStorage.setItem("polaris_route_endpoints_v4", JSON.stringify({ start, dest }));
               localStorage.setItem(
                 "polaris_vessel_pos",
                 JSON.stringify({ lat: realStartLat, lon: realStartLon })
@@ -408,7 +443,6 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
               lon: realDestLon,
             },
           }));
-          get().filterIcebergsAroundPosition(realStartLat, realStartLon, 50);
           return data.routes;
         }
       } catch (err) {
@@ -475,7 +509,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setIcebergs: (icebergs) =>
     set((s) => ({
       icebergs,
-      allIcebergs: s.allIcebergs.length === 0 && icebergs.length > 0 ? icebergs : s.allIcebergs,
+      allIcebergs: icebergs,
     })),
   setRoutes: (routes) => {
     let endpoints: { start: [number, number]; dest: [number, number] } | null = null;
@@ -486,9 +520,9 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
     }
     if (typeof window !== "undefined") {
       try {
-        localStorage.setItem("polaris_routes", JSON.stringify(routes));
+        localStorage.setItem("polaris_routes_v4", JSON.stringify(routes));
         if (endpoints) {
-          localStorage.setItem("polaris_route_endpoints", JSON.stringify(endpoints));
+          localStorage.setItem("polaris_route_endpoints_v4", JSON.stringify(endpoints));
         }
       } catch {}
     }
@@ -529,7 +563,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setSharedRoutes: (routes) => set({ routes, sharedRoutes: routes }),
   setSharedRouteLastFetch: (timestamp) => set({ sharedRouteLastFetch: timestamp }),
   allIcebergs: [],
-  setAllIcebergs: (allIcebergs) => set({ allIcebergs }),
+  setAllIcebergs: (allIcebergs) => set({ allIcebergs, icebergs: allIcebergs }),
   seaIceHeatmap: {
     opacity: 0.6,
     dataDate: null,
@@ -541,15 +575,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setSeaIceHeatmapMeta: (meta) =>
     set((s) => ({ seaIceHeatmap: { ...s.seaIceHeatmap, ...meta } })),
   filterIcebergsAroundPosition: (lat, lon, radiusNm = 50) => {
-    const { allIcebergs } = get();
-    if (!allIcebergs || allIcebergs.length === 0) return;
-    const filtered = allIcebergs.filter((ib) => {
-      const dlat = (ib.lat - lat) * 60;
-      const dlon = (ib.lon - lon) * 60 * Math.cos((lat * Math.PI) / 180);
-      const dist = Math.hypot(dlat, dlon);
-      return dist <= radiusNm;
-    });
-    set({ icebergs: filtered });
+    // Keep all 38 icebergs in state; 3D components filter locally
   },
   warpTarget: getInitialWarpTarget(),
   setWarpTarget: (warpTarget) => {
@@ -594,11 +620,11 @@ if (typeof window !== "undefined") {
 
   window.addEventListener("storage", (e) => {
     if (e.key === "polaris_locked_route" && e.newValue) {
-      if (e.newValue === "safest" || e.newValue === "balanced" || e.newValue === "fastest") {
+      if (e.newValue === "safest" || e.newValue === "balanced" || e.newValue === "eco" || e.newValue === "fastest") {
         usePolarisStore.setState({ lockedRouteId: e.newValue });
       }
     }
-    if (e.key === "polaris_routes" && e.newValue) {
+    if (e.key === "polaris_routes_v4" && e.newValue) {
       try {
         const routes = JSON.parse(e.newValue);
         if (Array.isArray(routes) && routes.length > 0) {
@@ -617,7 +643,7 @@ if (typeof window !== "undefined") {
         }
       } catch {}
     }
-    if (e.key === "polaris_route_endpoints" && e.newValue) {
+    if (e.key === "polaris_route_endpoints_v4" && e.newValue) {
       try {
         const endpoints = JSON.parse(e.newValue);
         if (endpoints && endpoints.start && endpoints.dest) {
@@ -642,5 +668,5 @@ if (typeof window !== "undefined") {
       } catch {}
     }
   });
+  (window as any).__POLARIS_STORE__ = usePolarisStore;
 }
-

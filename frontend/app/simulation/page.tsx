@@ -192,7 +192,7 @@ export default function SimulationPage() {
               <DataRealityBadge />
             </div>
             <div className="pointer-events-auto">
-              <Link href="/" className="hud-panel inline-block px-3 py-2 text-[10px] uppercase tracking-wide">
+              <Link href="/dashboard" className="hud-panel inline-block px-3 py-2 text-[10px] uppercase tracking-wide">
                 Overview map
               </Link>
             </div>

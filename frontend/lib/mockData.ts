@@ -113,38 +113,7 @@ export const MOCK_ICEBERGS: Iceberg[] = [
   },
 ];
 
-function seedIcebergs(): Iceberg[] {
-  const extras: Iceberg[] = [];
-  const rng = (n: number) => {
-    const x = Math.sin(n * 999.1) * 10000;
-    return x - Math.floor(x);
-  };
-  for (let i = 0; i < 18; i++) {
-    const lat = -68.7 + rng(i + 1) * 0.9;
-    const lon = -53.2 + rng(i + 7) * 1.8;
-    extras.push({
-      id: `IBG-2025-${String(200 + i).padStart(4, "0")}`,
-      name: `T-${200 + i}`,
-      lat,
-      lon,
-      diameterNm: 0.4 + rng(i + 3) * 1.8,
-      sizeClass: rng(i) > 0.7 ? "large" : rng(i) > 0.4 ? "medium" : "small",
-      status: "tracked",
-      highRisk: rng(i + 11) > 0.82,
-      dangerRadiusNm: 6 + rng(i + 5) * 6,
-      headingDeg: rng(i + 9) * 360,
-      predictedPath: [
-        { lat, lon, hour: 0 },
-        { lat: lat + 0.04, lon: lon + 0.18, hour: 24 },
-        { lat: lat + 0.07, lon: lon + 0.34, hour: 48 },
-        { lat: lat + 0.11, lon: lon + 0.5, hour: 72 },
-      ],
-    });
-  }
-  return extras;
-}
-
-export const ALL_ICEBERGS: Iceberg[] = [...MOCK_ICEBERGS, ...seedIcebergs()];
+export const ALL_ICEBERGS: Iceberg[] = [...MOCK_ICEBERGS];
 
 export const MOCK_ROUTES: RouteOption[] = [
   {
@@ -174,6 +143,20 @@ export const MOCK_ROUTES: RouteOption[] = [
       { lat: -68.38, lon: -51.7 },
       { lat: -68.46, lon: -50.95 },
       { lat: -68.55, lon: -50.2 },
+      { lat: -68.72, lon: -49.55 },
+    ],
+  },
+  {
+    id: "eco",
+    name: "Eco",
+    distanceNm: 105.2,
+    etaHours: 12.8,
+    fuelMt: 14.7,
+    riskScore: 0.42,
+    points: [
+      { lat: -68.35, lon: -52.45 },
+      { lat: -68.32, lon: -51.65 },
+      { lat: -68.42, lon: -50.8 },
       { lat: -68.72, lon: -49.55 },
     ],
   },

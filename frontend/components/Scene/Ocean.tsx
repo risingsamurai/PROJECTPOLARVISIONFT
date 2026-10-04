@@ -49,7 +49,8 @@ export function Ocean() {
   const quality = usePolarisStore((s) => s.graphicsQuality || "high");
 
   const [geom, waterNormals] = useMemo(() => {
-    const g = new THREE.PlaneGeometry(2400, 2400, 64, 64);
+    // 120,000 unit radius infinite ocean plane
+    const g = new THREE.PlaneGeometry(120000, 120000, 64, 64);
     const loader = new THREE.TextureLoader();
     const norm = loader.load("/textures/waternormals.jpg", (texture) => {
       texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
@@ -72,9 +73,15 @@ export function Ocean() {
     [waterNormals, quality]
   );
 
-  useFrame((_, dt) => {
-    if (ref.current?.material?.uniforms?.time) {
-      ref.current.material.uniforms.time.value += dt * 0.8;
+  useFrame(({ camera }, dt) => {
+    if (ref.current) {
+      if (ref.current.material?.uniforms?.time) {
+        ref.current.material.uniforms.time.value += dt * 0.8;
+      }
+      // Snap x and z to wave wavelength (28.0) so waves do not swim when camera moves
+      const snapStep = 28.0;
+      ref.current.position.x = Math.floor(camera.position.x / snapStep) * snapStep;
+      ref.current.position.z = Math.floor(camera.position.z / snapStep) * snapStep;
     }
   });
 

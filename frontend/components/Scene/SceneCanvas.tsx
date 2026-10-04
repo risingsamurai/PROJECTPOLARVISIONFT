@@ -7,11 +7,12 @@ import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 import { DangerZones } from "./DangerZone";
-import { IcebergField, createIceberg, SHARED_GEOMETRIES, IcebergBodyLayers } from "./Iceberg";
+import { IcebergField } from "./Iceberg";
 import { Ocean } from "./Ocean";
 import { RouteLine } from "./RouteLine";
 import { Vessel } from "./Vessel";
 import { AntarcticLandmass } from "./AntarcticLandmass";
+import { DestinationBeacon } from "./DestinationBeacon";
 
 function PanoramaEnvironment() {
   const { scene, gl } = useThree();
@@ -111,19 +112,13 @@ function ChaseCamera() {
       orbitYaw,
       orbitPitch,
       cameraDistance,
-      selectedIcebergId,
-      icebergs,
       cameraTargetCoord,
     } = usePolarisStore.getState();
 
+    // Camera targets the vessel (or cameraTargetCoord if waypoint focused), NEVER dragged to distant icebergs
     let targetPosition = { lat: vessel.lat, lon: vessel.lon };
     if (cameraTargetCoord) {
       targetPosition = { lat: cameraTargetCoord[0], lon: cameraTargetCoord[1] };
-    } else if (selectedIcebergId) {
-      const selectedIceberg = icebergs.find((ib) => ib.id === selectedIcebergId);
-      if (selectedIceberg) {
-        targetPosition = { lat: selectedIceberg.lat, lon: selectedIceberg.lon };
-      }
     }
     
     const [x, , z] = latLonToScene(targetPosition.lat, targetPosition.lon);
@@ -158,116 +153,11 @@ function ChaseCamera() {
   return null;
 }
 
-function IceFloeOverlays() {
-  const on = usePolarisStore((s) => s.layers.seaIce);
-  const day = usePolarisStore((s) => s.forecastDay);
-  const quality = usePolarisStore((s) => s.graphicsQuality || "high");
-  if (!on) return null;
-
-  const count = 16 + day * 4;
-  const floes = [
-    { x: -12, z: -18, scale: 6.2, rot: 0.4 },
-    { x: 18, z: -32, scale: 9.5, rot: 1.1 },
-    { x: 34, z: 12, scale: 7.8, rot: 2.3 },
-    { x: -45, z: 28, scale: 12.0, rot: 0.8 },
-    { x: 52, z: -48, scale: 8.4, rot: 1.7 },
-    { x: -28, z: -55, scale: 11.2, rot: 2.9 },
-    { x: 68, z: 35, scale: 7.0, rot: 0.2 },
-    { x: -62, z: -15, scale: 14.5, rot: 1.4 },
-    { x: 15, z: 62, scale: 8.8, rot: 2.1 },
-    { x: -75, z: 45, scale: 10.5, rot: 0.6 },
-    { x: 82, z: -22, scale: 13.0, rot: 1.9 },
-    { x: -38, z: 78, scale: 9.2, rot: 2.7 },
-    { x: 42, z: 85, scale: 11.8, rot: 0.5 },
-    { x: -88, z: -68, scale: 15.0, rot: 1.3 },
-    { x: 95, z: 52, scale: 8.1, rot: 2.4 },
-    { x: -55, z: -92, scale: 13.4, rot: 0.9 },
-  ];
-
-  return (
-    <group position={[0, 0, 0]}>
-      {floes.slice(0, Math.min(count, floes.length)).map((f, i) => {
-        const list = quality === "low" ? SHARED_GEOMETRIES.low : SHARED_GEOMETRIES.high;
-        const spires = list.filter((g) => g.class === "spire");
-        const geo = spires[i % spires.length].geo;
-        const s = f.scale * 0.55;
-        return (
-          <group key={i} position={[f.x, 0, f.z]}>
-            <IcebergBodyLayers
-              geometry={geo}
-              scale={[s, f.scale * 1.4, s]}
-              rotation={[0, f.rot, 0]}
-              quality={quality}
-              footprint={1.38}
-              showEffects={false}
-            />
-          </group>
-        );
-      })}
-    </group>
-  );
-}
-
-function DistantIslandsAndIceShelf() {
-  const quality = usePolarisStore((s) => s.graphicsQuality || "high");
-  const shelfVariants = useMemo(() => {
-    const q = quality === "low" ? 3 : 5;
-    return [11, 12, 13, 14].map((seed) =>
-      createIceberg({ radius: 1, height: 0.16, seed, detail: q, kind: "shelf" })
-    );
-  }, [quality]);
-
-  const shelfSegments = useMemo(
-    () =>
-      Array.from({ length: 11 }, (_, i) => ({
-        x: -720 + i * 135,
-        seedIdx: i % shelfVariants.length,
-        rot: (i * 0.31) % (Math.PI * 2),
-        stretch: 0.92 + (i % 3) * 0.06,
-      })),
-    [shelfVariants.length]
-  );
-
-  return (
-    <group>
-      {/* Distant Dark Rock Islands */}
-      <mesh position={[-380, 8, -450]} rotation={[0, 0.4, 0]}>
-        <coneGeometry args={[45, 38, 6]} />
-        <meshStandardMaterial color="#1e293b" roughness={0.9} flatShading />
-      </mesh>
-      <mesh position={[-290, 6, -490]} rotation={[0, 0.9, 0]}>
-        <coneGeometry args={[32, 28, 5]} />
-        <meshStandardMaterial color="#0f172a" roughness={0.9} flatShading />
-      </mesh>
-      <mesh position={[420, 10, -520]} rotation={[0, -0.6, 0]}>
-        <coneGeometry args={[55, 42, 7]} />
-        <meshStandardMaterial color="#1e293b" roughness={0.88} flatShading />
-      </mesh>
-
-      {/* Distant Low Ice Shelf on Horizon */}
-      <group position={[0, 0, -650]}>
-        {shelfSegments.map((seg, i) => (
-          <group key={i} position={[seg.x, 0, (i % 2 === 0 ? 1 : -1) * 8]}>
-            <IcebergBodyLayers
-              geometry={shelfVariants[seg.seedIdx]}
-              scale={[128 * seg.stretch, 22, 118 * seg.stretch]}
-              rotation={[0, seg.rot, 0]}
-              quality={quality}
-              footprint={1.05}
-              showEffects={false}
-            />
-          </group>
-        ))}
-      </group>
-    </group>
-  );
-}
-
 export function SceneCanvas() {
   return (
     <Canvas
       camera={{ position: [0, 16, 32], fov: 52, near: 0.1, far: 3000 }}
-      dpr={typeof window !== "undefined" ? Math.min(2, window.devicePixelRatio) : 1}
+      dpr={typeof window !== "undefined" ? Math.min(1.5, window.devicePixelRatio) : 1}
       tabIndex={0}
       onPointerMissed={() => usePolarisStore.getState().selectIceberg(null)}
       gl={{ antialias: true, powerPreference: "high-performance" }}
@@ -285,8 +175,8 @@ export function SceneCanvas() {
         intensity={2.1}
         castShadow
         color="#ffedd5"
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={1024}
+        shadow-mapSize-height={1024}
         shadow-camera-near={1}
         shadow-camera-far={800}
         shadow-camera-left={-160}
@@ -300,9 +190,8 @@ export function SceneCanvas() {
       <ChaseCamera />
       <Ocean />
       <AntarcticLandmass />
-      <DistantIslandsAndIceShelf />
-      <IceFloeOverlays />
       <Vessel />
+      <DestinationBeacon />
       <IcebergField />
       <DangerZones />
       <RouteLine />

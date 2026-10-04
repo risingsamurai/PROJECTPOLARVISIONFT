@@ -8,9 +8,10 @@ import { usePolarisStore } from "@/lib/store";
 import type { RouteOption } from "@/lib/mockData";
 
 const PROFILE_COLORS: Record<string, { main: string; bead: string; glow: string }> = {
-  safest: { main: "#0E7A3F", bead: "#0E7A3F", glow: "#0E7A3F" },
+  safest: { main: "#22c55e", bead: "#4ade80", glow: "#22c55e" },
   balanced: { main: "#eab308", bead: "#fde047", glow: "#f59e0b" },
-  fastest: { main: "#9E1B1B", bead: "#9E1B1B", glow: "#9E1B1B" },
+  eco: { main: "#38bdf8", bead: "#7dd3fc", glow: "#38bdf8" },
+  fastest: { main: "#ef4444", bead: "#f87171", glow: "#ef4444" },
 };
 
 function SingleRouteLine({
@@ -24,6 +25,15 @@ function SingleRouteLine({
 
   const colors = PROFILE_COLORS[route.id] || PROFILE_COLORS.balanced;
 
+  const yElev =
+    route.id === "safest"
+      ? 0.52
+      : route.id === "balanced"
+      ? 0.49
+      : route.id === "eco"
+      ? 0.46
+      : 0.43;
+
   const { positions, linePositions } = useMemo(() => {
     if (!route?.points || route.points.length < 2) {
       return {
@@ -34,7 +44,7 @@ function SingleRouteLine({
 
     const pts: THREE.Vector3[] = route.points.map((p: { lat: number; lon: number }) => {
       const [px, , pz] = latLonToScene(p.lat, p.lon);
-      return new THREE.Vector3(px, 0.45, pz);
+      return new THREE.Vector3(px, yElev, pz);
     });
 
     // Generate smooth curve through waypoints
@@ -90,9 +100,8 @@ function SingleRouteLine({
         <lineBasicMaterial
           color={colors.main}
           transparent
-          opacity={route.id !== "balanced" ? 0.9 : (isSelected ? 0.95 : 0.28)}
-          linewidth={route.id !== "balanced" ? 3 : (isSelected ? 3 : 1)}
-          toneMapped={route.id !== "balanced" ? false : undefined}
+          opacity={isSelected ? 0.95 : 0.35}
+          linewidth={isSelected ? 3 : 1.5}
         />
       </line>
 

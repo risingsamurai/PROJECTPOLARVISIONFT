@@ -81,7 +81,7 @@ export async function evaluateAlert(lat: number, lon: number, sog: number, cog: 
 
 export async function fetchWildlifeColonies() {
   try {
-    const r = await fetch(`${API}/api/wildlife/colonies`);
+    const r = await fetch(`${API_BASE}/api/wildlife/colonies`);
     if (!r.ok) throw new Error("wildlife fetch failed");
     return (await r.json()) as { status: string; count: number; colonies: any[] };
   } catch {
@@ -92,7 +92,7 @@ export async function fetchWildlifeColonies() {
 
 export async function fetchDispersionPlume(day: number = 1) {
   try {
-    const r = await fetch(`${API}/api/ocean/dispersion-plume?day=${day}`);
+    const r = await fetch(`${API_BASE}/api/ocean/dispersion-plume?day=${day}`);
     if (!r.ok) throw new Error("ocean plume fetch failed");
     return await r.json();
   } catch {
@@ -109,7 +109,7 @@ export async function fetchDispersionPlume(day: number = 1) {
 
 export async function fetchFlowField(day: number = 1) {
   try {
-    const r = await fetch(`${API}/api/ocean/flow-field?day=${day}`);
+    const r = await fetch(`${API_BASE}/api/ocean/flow-field?day=${day}`);
     if (!r.ok) throw new Error("ocean flow-field fetch failed");
     return (await r.json()) as import("./mockData").FlowFieldData;
   } catch {

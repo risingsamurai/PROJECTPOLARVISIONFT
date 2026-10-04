@@ -41,3 +41,8 @@ node_modules/
 .env
 .env.local
 .DS_Store
+frontend/scripts/run_full_audit.js
+frontend/scripts/run_task4_verification.js
+frontend/scripts/run_step3_verification.js
+frontend/scripts/run_step3_comprehensive_verification.js
+frontend/scripts/run_step4_verification.js

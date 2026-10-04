@@ -33,27 +33,23 @@ export function LayerControlPanel() {
               key={item.key}
               className="flex flex-col gap-1"
             >
-              <span className="text-white/85 font-medium text-[11px]">
-                {item.label}
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={on}
-                onClick={() => toggle(item.key)}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  on
-                    ? item.color === "teal"
-                      ? "bg-teal-500 shadow-sm shadow-teal-500/50"
-                      : item.color === "cyan"
-                      ? "bg-cyan-400 shadow-sm shadow-cyan-400/50"
-                      : "bg-cyan-500 shadow-sm shadow-cyan-500/50"
-                    : "bg-white/20"
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                    on ? "translate-x-4" : "translate-x-0"
+              <div className="flex items-center justify-between">
+                <span className="text-white/85 font-medium text-[11px]">
+                  {item.label}
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={on}
+                  onClick={() => toggle(item.key)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    on
+                      ? item.color === "teal"
+                        ? "bg-teal-500 shadow-sm shadow-teal-500/50"
+                        : item.color === "cyan"
+                        ? "bg-cyan-400 shadow-sm shadow-cyan-400/50"
+                        : "bg-cyan-500 shadow-sm shadow-cyan-500/50"
+                      : "bg-white/20"
                   }`}
                 >
                   <span

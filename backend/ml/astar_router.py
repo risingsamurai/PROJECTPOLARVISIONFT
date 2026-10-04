@@ -2,26 +2,12 @@ from __future__ import annotations
 
 import heapq
 import math
-import time
 from typing import Iterable
 
 try:
-    from data.land_mask import is_land, is_segment_land, snap_to_sea
+    from data.land_mask import is_land, is_segment_land
 except ImportError:
-    from backend.data.land_mask import is_land, is_segment_land, snap_to_sea
-
-try:
-    from ml.fuel_model import (
-        lookup_sic, route_fuel, eco_edge_cost, segment_fuel,
-        ice_resistance_factor, ice_speed_fraction,
-    )
-    from config.vessel_params import PROFILE_SPEEDS, min_fuel_per_nm, IMPASSABLE_ICE_SIC
-except ImportError:
-    from backend.ml.fuel_model import (
-        lookup_sic, route_fuel, eco_edge_cost, segment_fuel,
-        ice_resistance_factor, ice_speed_fraction,
-    )
-    from backend.config.vessel_params import PROFILE_SPEEDS, min_fuel_per_nm, IMPASSABLE_ICE_SIC
+    from backend.data.land_mask import is_land, is_segment_land
 
 
 def _haversine_nm(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -34,20 +20,9 @@ def _haversine_nm(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def _ice_at(lat: float, lon: float) -> float:
-    """
-    Returns sea-ice concentration for routing cost.
-    Tries NSIDC live/cached grid first; falls back to analytic model.
-    """
-    # Try live NSIDC grid first (only in Antarctic zone where we have data)
-    if lat <= -55.0:
-        try:
-            sic = lookup_sic(lat, lon)
-            if sic >= 0.0:
-                return sic
-        except Exception:
-            pass
-    # Analytic fallback (same formula as before)
+    # Heavy polar pack ice south of 66S; lighter ice further north
     zonal = 0.15 + 0.55 / (1.0 + math.exp((lat + 66.0) / 1.6))
+    # Dense pack ice accumulation along Antarctic Peninsula in western Weddell (lon < -45)
     peninsula_pack = 0.30 * max(0.0, min(1.0, (-lon - 45.0) / 10.0)) * max(0.0, min(1.0, (-lat - 63.0) / 6.0))
     return max(0.0, min(1.0, zonal + peninsula_pack))
 
@@ -61,173 +36,6 @@ def _berg_penalty(lat: float, lon: float, bergs: Iterable[dict], radius_nm: floa
     return p
 
 
-# ---------------------------------------------------------------------------
-# Global Maritime Corridor Graph & Strait Fairways
-# ---------------------------------------------------------------------------
-GLOBAL_CORRIDOR_NODES: dict[str, tuple[float, float]] = {
-    # Suez & Red Sea Corridor
-    "suez_north": (31.2, 32.3),
-    "suez_port": (29.9, 32.55),
-    "suez_gulf_n": (29.5, 32.58),
-    "suez_gulf_mid": (29.0, 32.85),
-    "suez_gulf_s": (28.5, 33.1),
-    "suez_gulf_exit": (27.8, 33.7),
-    "gubal_e1": (27.8, 34.0),
-    "gubal_e2": (27.5, 34.3),
-    "gubal_e3": (27.0, 34.5),
-    "red_sea_north": (26.0, 35.0),
-    "red_sea_mid": (22.0, 38.0),
-    "red_sea_south": (16.5, 41.2),
-    "red_sea_mid_south": (15.0, 42.0),
-    "red_sea_zuqar_n": (14.0, 42.4),
-    "red_sea_zuqar_s": (13.5, 42.5),
-    "red_sea_zuqar_se": (13.3, 42.7),
-    "bab_el_mandeb_n": (13.0, 43.15),
-    "bab_el_mandeb_mid": (12.6, 43.4),
-    "gulf_aden_w": (12.0, 44.5),
-    "gulf_aden_mid": (12.5, 48.0),
-    "gulf_aden_e": (12.2, 51.5),
-    "guardafui_channel": (11.5, 52.5),
-    "somali_basin": (5.0, 52.5),
-    "equatorial_ind_w": (0.0, 50.0),
-    "mozambique_n": (-10.0, 43.0),
-    "mozambique_n2": (-14.0, 42.0),
-    "mozambique_mid": (-18.0, 39.0),
-    "mozambique_s": (-25.0, 36.0),
-    "durban_offshore": (-30.0, 33.0),
-    "port_elizabeth_offshore": (-34.5, 27.0),
-    "cape_agulhas": (-35.8, 20.0),
-    "cape_good_hope_offshore": (-35.0, 17.5),
-    "south_atlantic_e": (-36.0, 10.0),
-    "south_atlantic_mid": (-42.0, 0.0),
-    "south_atlantic_w": (-48.0, -15.0),
-    "sub_antarctic_scotia_e": (-56.0, -30.0),
-    "scotia_sea_mid": (-58.0, -45.0),
-    "weddell_approach_ne": (-62.0, -45.0),
-    "weddell_approach_nw": (-62.0, -52.0),
-
-    # Mediterranean & Gibraltar Corridor
-    "gibraltar_east": (36.0, -5.0),
-    "gibraltar_strait": (35.95, -5.6),
-    "gibraltar_west": (35.95, -6.2),
-    "gibraltar_atlantic": (35.9, -6.8),
-    "morocco_offshore": (34.0, -11.0),
-    "canary_passage_w": (30.0, -16.0),
-    "canary_south_w": (25.0, -20.0),
-    "cape_verde_nw": (20.0, -22.0),
-    "cape_verde_w": (16.0, -28.0),
-    "equatorial_atlantic_w": (0.0, -28.0),
-    "south_atlantic_nw": (-15.0, -30.0),
-    "south_atlantic_sw": (-30.0, -34.0),
-    "argentine_basin_e": (-42.0, -42.0),
-    "falklands_e": (-52.0, -55.0),
-    "drake_passage_n": (-56.0, -65.0),
-    "drake_passage_s": (-60.0, -64.0),
-    "antarctic_peninsula_w": (-64.0, -66.0),
-    "antarctic_peninsula_tip": (-63.0, -58.0),
-}
-
-GLOBAL_CORRIDOR_EDGES: list[tuple[str, str]] = [
-    # Suez & Indian Ocean chain
-    ("suez_north", "suez_port"),
-    ("suez_port", "suez_gulf_n"),
-    ("suez_gulf_n", "suez_gulf_mid"),
-    ("suez_gulf_mid", "suez_gulf_s"),
-    ("suez_gulf_s", "suez_gulf_exit"),
-    ("suez_gulf_exit", "gubal_e1"),
-    ("gubal_e1", "gubal_e2"),
-    ("gubal_e2", "gubal_e3"),
-    ("gubal_e3", "red_sea_north"),
-    ("red_sea_north", "red_sea_mid"),
-    ("red_sea_mid", "red_sea_south"),
-    ("red_sea_south", "red_sea_mid_south"),
-    ("red_sea_mid_south", "red_sea_zuqar_n"),
-    ("red_sea_zuqar_n", "red_sea_zuqar_s"),
-    ("red_sea_zuqar_s", "red_sea_zuqar_se"),
-    ("red_sea_zuqar_se", "bab_el_mandeb_n"),
-    ("bab_el_mandeb_n", "bab_el_mandeb_mid"),
-    ("bab_el_mandeb_mid", "gulf_aden_w"),
-    ("gulf_aden_w", "gulf_aden_mid"),
-    ("gulf_aden_mid", "gulf_aden_e"),
-    ("gulf_aden_e", "guardafui_channel"),
-    ("guardafui_channel", "somali_basin"),
-    ("somali_basin", "equatorial_ind_w"),
-    ("equatorial_ind_w", "mozambique_n"),
-    ("mozambique_n", "mozambique_n2"),
-    ("mozambique_n2", "mozambique_mid"),
-    ("mozambique_mid", "mozambique_s"),
-    ("mozambique_s", "durban_offshore"),
-    ("durban_offshore", "port_elizabeth_offshore"),
-    ("port_elizabeth_offshore", "cape_agulhas"),
-    ("cape_agulhas", "cape_good_hope_offshore"),
-    ("cape_good_hope_offshore", "south_atlantic_e"),
-    ("south_atlantic_e", "south_atlantic_mid"),
-    ("south_atlantic_mid", "south_atlantic_w"),
-    ("south_atlantic_w", "sub_antarctic_scotia_e"),
-    ("sub_antarctic_scotia_e", "scotia_sea_mid"),
-    ("scotia_sea_mid", "weddell_approach_ne"),
-    ("weddell_approach_ne", "weddell_approach_nw"),
-
-    # Gibraltar & Atlantic chain
-    ("gibraltar_east", "gibraltar_strait"),
-    ("gibraltar_strait", "gibraltar_west"),
-    ("gibraltar_west", "gibraltar_atlantic"),
-    ("gibraltar_atlantic", "morocco_offshore"),
-    ("morocco_offshore", "canary_passage_w"),
-    ("canary_passage_w", "canary_south_w"),
-    ("canary_south_w", "cape_verde_nw"),
-    ("cape_verde_nw", "cape_verde_w"),
-    ("cape_verde_w", "equatorial_atlantic_w"),
-    ("equatorial_atlantic_w", "south_atlantic_nw"),
-    ("south_atlantic_nw", "south_atlantic_sw"),
-    ("south_atlantic_sw", "argentine_basin_e"),
-    ("argentine_basin_e", "falklands_e"),
-    ("falklands_e", "weddell_approach_nw"),
-    ("falklands_e", "scotia_sea_mid"),
-
-    # Cross links
-    ("south_atlantic_sw", "south_atlantic_mid"),
-    ("south_atlantic_nw", "south_atlantic_e"),
-
-    # Drake & Peninsula
-    ("falklands_e", "drake_passage_n"),
-    ("drake_passage_n", "drake_passage_s"),
-    ("drake_passage_s", "antarctic_peninsula_w"),
-    ("drake_passage_s", "antarctic_peninsula_tip"),
-    ("antarctic_peninsula_tip", "weddell_approach_nw"),
-]
-
-# Build adjacency map
-_CORRIDOR_ADJ: dict[str, list[tuple[str, float]]] = {}
-for _k in GLOBAL_CORRIDOR_NODES:
-    _CORRIDOR_ADJ[_k] = []
-for _u, _v in GLOBAL_CORRIDOR_EDGES:
-    _d = _haversine_nm(GLOBAL_CORRIDOR_NODES[_u], GLOBAL_CORRIDOR_NODES[_v])
-    _CORRIDOR_ADJ[_u].append((_v, _d))
-    _CORRIDOR_ADJ[_v].append((_u, _d))
-
-
-def _densify_route(waypoints: list[tuple[float, float]], max_step_deg: float = 0.25) -> list[tuple[float, float]]:
-    """Densifies a coarse waypoint path so waypoints are placed every max_step_deg (~15 NM)."""
-    if len(waypoints) < 2:
-        return waypoints
-
-    dense = [waypoints[0]]
-    for p1, p2 in zip(waypoints, waypoints[1:]):
-        dlat = p2[0] - p1[0]
-        dlon = p2[1] - p1[1]
-        dist_deg = math.hypot(dlat, dlon)
-        num_sub = max(1, int(math.ceil(dist_deg / max_step_deg)))
-
-        for i in range(1, num_sub + 1):
-            t = i / float(num_sub)
-            lat = round(p1[0] + dlat * t, 4)
-            lon = round(p1[1] + dlon * t, 4)
-            dense.append((lat, lon))
-
-    return dense
-
-
 def astar(
     start: tuple[float, float],
     dest: tuple[float, float],
@@ -238,10 +46,9 @@ def astar(
     berg_radius: float,
     step: float = 0.18,
     corridor_bias: float = 0.0,
-    max_iter: int = 10000,
-    profile: str = "balanced",
+    max_iter: int = 15000,
 ) -> list[tuple[float, float]]:
-    """Runs land-avoiding, ice-aware, iceberg-avoiding A* search for Antarctic regional waters."""
+    """Runs land-avoiding, ice-aware, iceberg-avoiding A* search with strictly non-negative edge costs."""
     s = (float(start[0]), float(start[1]))
     d = (float(dest[0]), float(dest[1]))
     step_nm = step * 60.0
@@ -252,25 +59,12 @@ def astar(
     max_lon = max(s[1], d[1]) + 12.0
 
     rel_bergs = [
-        b for b in bergs
+        b for b in bergs 
         if min_lat <= b["lat"] <= max_lat and min_lon <= b["lon"] <= max_lon
     ]
 
-    dx = d[0] - s[0]
-    dy = d[1] - s[1]
-    length = math.hypot(dx, dy) or 1.0
-
-    # Profile speed for ETA / fuel cost in Antarctic A*
-    speed_kts = PROFILE_SPEEDS.get(profile, PROFILE_SPEEDS["balanced"])
-    is_eco = (profile == "eco")
-    _min_fuel_nm = min_fuel_per_nm()
-
     def heur(n: tuple[float, float]) -> float:
-        remaining_nm = _haversine_nm(n, d)
-        if is_eco:
-            # Admissible: minimum fuel per NM at optimal eco speed in open water
-            return remaining_nm * _min_fuel_nm
-        return remaining_nm * dist_w
+        return _haversine_nm(n, d) * dist_w
 
     openh: list[tuple[float, tuple[float, float]]] = [(heur(s), s)]
     came: dict[tuple[float, float], tuple[float, float] | None] = {s: None}
@@ -308,7 +102,7 @@ def astar(
 
         for dlat, dlon in dirs:
             nxt = (round(current[0] + dlat, 3), round(current[1] + dlon, 3))
-
+            
             if nxt in visited or is_land(nxt[0], nxt[1]):
                 continue
 
@@ -318,149 +112,22 @@ def astar(
 
             ice = _ice_at(*nxt)
             berg_pen = _berg_penalty(*nxt, rel_bergs, berg_radius)
-
-            # Signed perpendicular distance from straight line
-            perp = (dy * (nxt[0] - s[0]) - dx * (nxt[1] - s[1])) / length
-            bias_cost = -perp * corridor_bias
-
             step_d = _haversine_nm(current, nxt)
-
-            if is_eco:
-                # Eco profile: A* edge cost is predicted fuel for this step
-                mid_lat = (current[0] + nxt[0]) / 2
-                mid_lon = (current[1] + nxt[1]) / 2
-                sic = _ice_at(mid_lat, mid_lon)
-                fuel_cost, _, _, _ = segment_fuel(mid_lat, mid_lon, step_d, speed_kts, sic)
-                cost = (
-                    fuel_cost
-                    + berg_w * min(1.0, berg_pen * 0.05) * 0.01
-                    + bias_cost * 0.001
-                )
-            else:
-                cost = (
-                    dist_w * step_d
-                    + ice_w * (ice ** 2) * 50.0
-                    + berg_w * min(100.0, berg_pen * 25.0)
-                    + bias_cost
-                )
-
+            
+            # Pure positive cost metric guarantees monotonic A* search
+            cost = (
+                dist_w * step_d
+                + ice_w * (ice ** 2) * 50.0
+                + berg_w * min(100.0, berg_pen * 25.0)
+            )
+            
             tentative = gscore[current] + cost
             if tentative < gscore.get(nxt, 1e18):
                 gscore[nxt] = tentative
                 came[nxt] = current
                 heapq.heappush(openh, (tentative + heur(nxt), nxt))
 
-    return []
-
-
-def _route_global_corridor(
-    start: tuple[float, float],
-    dest: tuple[float, float],
-    bergs: list[dict],
-    ice_w: float,
-    berg_w: float,
-    dist_w: float,
-    berg_radius: float,
-    corridor_bias: float,
-    profile: str = "balanced",
-) -> list[tuple[float, float]]:
-    """Calculates global sea route using the maritime corridor graph and 0.25-deg resolution densification."""
-    s = start
-    d = dest
-
-    # 1. Check direct sea line of sight
-    if not is_segment_land(s, d, num_samples=max(20, int(_haversine_nm(s, d) / 10.0))):
-        return _densify_route([s, d], max_step_deg=0.25)
-
-    # 2. Connect start and dest to nearest navigable corridor nodes
-    s_candidates: list[tuple[str, float]] = []
-    d_candidates: list[tuple[str, float]] = []
-
-    sorted_s = sorted(GLOBAL_CORRIDOR_NODES.items(), key=lambda item: _haversine_nm(s, item[1]))
-    for name, pos in sorted_s[:10]:
-        dist_s = _haversine_nm(s, pos)
-        if not is_segment_land(s, pos):
-            s_candidates.append((name, dist_s))
-            if len(s_candidates) >= 3:
-                break
-
-    sorted_d = sorted(GLOBAL_CORRIDOR_NODES.items(), key=lambda item: _haversine_nm(d, item[1]))
-    for name, pos in sorted_d[:10]:
-        dist_d = _haversine_nm(pos, d)
-        if not is_segment_land(pos, d):
-            d_candidates.append((name, dist_d))
-            if len(d_candidates) >= 3:
-                break
-
-    if not s_candidates:
-        closest_s = sorted_s[0][0]
-        s_candidates.append((closest_s, _haversine_nm(s, GLOBAL_CORRIDOR_NODES[closest_s])))
-
-    if not d_candidates:
-        closest_d = sorted_d[0][0]
-        d_candidates.append((closest_d, _haversine_nm(GLOBAL_CORRIDOR_NODES[closest_d], d)))
-
-    # 3. Dijkstra / A* across corridor network
-    q: list[tuple[float, str, list[tuple[float, float]]]] = []
-    for name, dist in s_candidates:
-        heapq.heappush(q, (dist * dist_w, name, [s, GLOBAL_CORRIDOR_NODES[name]]))
-
-    visited: dict[str, float] = {}
-    best_path: list[tuple[float, float]] | None = None
-    best_cost = 1e18
-
-    while q:
-        cost, u, path = heapq.heappop(q)
-        if u in visited and visited[u] <= cost:
-            continue
-        visited[u] = cost
-
-        # Check connection to dest
-        for d_name, d_dist in d_candidates:
-            if u == d_name:
-                total_cost = cost + d_dist * dist_w
-                if total_cost < best_cost:
-                    best_cost = total_cost
-                    best_path = path + [d]
-
-        for v, edge_d in _CORRIDOR_ADJ[u]:
-            next_cost = cost + edge_d * dist_w
-            if next_cost < visited.get(v, 1e18):
-                heapq.heappush(q, (next_cost, v, path + [GLOBAL_CORRIDOR_NODES[v]]))
-
-    if not best_path:
-        raise ValueError(f"No navigable sea path found between {start} and {dest}")
-
-    # 4. If destination is inside the Antarctic zone (lat <= -52), refine polar approach with Antarctic A*
-    if d[0] <= -52.0 and len(best_path) >= 2:
-        polar_entry_idx = len(best_path) - 1
-        for i in range(len(best_path) - 1, -1, -1):
-            if best_path[i][0] <= -52.0:
-                polar_entry_idx = i
-            else:
-                break
-
-        polar_entry = best_path[polar_entry_idx]
-        if _haversine_nm(polar_entry, d) > 30.0:
-            local_polar = astar(
-                start=polar_entry,
-                dest=d,
-                bergs=bergs,
-                ice_w=ice_w,
-                berg_w=berg_w,
-                dist_w=dist_w,
-                berg_radius=berg_radius,
-                step=0.18,
-                corridor_bias=corridor_bias,
-                max_iter=10000,
-                profile=profile,
-            )
-            if local_polar and len(local_polar) >= 2:
-                best_path = best_path[:polar_entry_idx] + local_polar
-
-    # 5. Densify intermediate legs to 0.25 deg resolution
-    dense_path = _densify_route(best_path, max_step_deg=0.25)
-    return dense_path
+    return [s, d]
 
 
 def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius: float, max_lookahead: int = 6) -> list[tuple[float, float]]:
@@ -529,8 +196,10 @@ def _calculate_dynamic_risk(pts: list[tuple[float, float]], bergs: list[dict], p
 
     if profile == "safest":
         risk = max(0.05, min(0.25, risk * 0.5))
-    elif profile in ("balanced", "eco"):
+    elif profile == "balanced":
         risk = max(0.20, min(0.55, risk * 1.0 + 0.15))
+    elif profile == "eco":
+        risk = max(0.18, min(0.50, risk * 0.9 + 0.12))
     else:
         risk = max(0.40, min(0.95, risk * 1.5 + 0.35))
 
@@ -538,90 +207,39 @@ def _calculate_dynamic_risk(pts: list[tuple[float, float]], bergs: list[dict], p
 
 
 def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> list[dict]:
-    """
-    Generates four distinct routes (Safest, Balanced, Eco, Fastest) with:
-      - Correct physical fuel model (not distance × constant)
-      - Fuel breakdown (base, ice-added, weather-added)
-      - Sanity checks: Fuel-Efficient <= Balanced <= Fastest fuel
-    """
-    t_start = time.perf_counter()
-    s_raw = (float(start[0]), float(start[1]))
-    d_raw = (float(dest[0]), float(dest[1]))
+    """Generates four distinct routes (Safest, Balanced, Eco, Fastest) using land-avoiding A*."""
+    s = (float(start[0]), float(start[1]))
+    d = (float(dest[0]), float(dest[1]))
 
-    # Snap coordinates if on land
-    s = snap_to_sea(s_raw[0], s_raw[1])
-    d = snap_to_sea(d_raw[0], d_raw[1])
-
-    is_regional_antarctic = (s[0] <= -50.0 and d[0] <= -50.0 and _haversine_nm(s, d) < 1800.0)
-
-    # (rid, name, ice_w, berg_w, dist_w, berg_radius, bias, profile_key)
+    # (id, name, ice_w, berg_w, dist_w, berg_radius, speed, fuel_rate)
     specs = [
-        ("safest",   "Safest",   8.0, 50.0, 0.9, 30.0,  0.6, "safest"),
-        ("balanced", "Balanced", 2.0, 15.0, 1.0, 15.0,  0.0, "balanced"),
-        ("eco",      "Eco",      1.5, 10.0, 0.8, 12.0,  0.0, "eco"),
-        ("fastest",  "Fastest",  0.3,  1.0, 1.3,  5.0, -0.2, "fastest"),
+        ("safest",   "Safest",   8.0, 50.0, 0.9, 30.0,  9.5, 0.14),
+        ("balanced", "Balanced", 2.0, 15.0, 1.0, 15.0, 12.5, 0.14),
+        ("eco",      "Eco",      1.0,  6.0, 1.1, 10.0, 10.0, 0.11),
+        ("fastest",  "Fastest",  0.3,  1.0, 1.3,  5.0, 16.0, 0.14),
     ]
 
     out = []
-    for rid, name, ice_w, berg_w, dist_w, berg_radius, bias, prof in specs:
-        if is_regional_antarctic:
-            raw_pts = astar(
-                start=s,
-                dest=d,
-                bergs=bergs,
-                ice_w=ice_w,
-                berg_w=berg_w,
-                dist_w=dist_w,
-                berg_radius=berg_radius,
-                step=0.18,
-                corridor_bias=bias,
-                max_iter=10000,
-                profile=prof,
-            )
-            # If regional A* failed to find path, fallback to corridor
-            if not raw_pts:
-                raw_pts = _route_global_corridor(
-                    start=s,
-                    dest=d,
-                    bergs=bergs,
-                    ice_w=ice_w,
-                    berg_w=berg_w,
-                    dist_w=dist_w,
-                    berg_radius=berg_radius,
-                    corridor_bias=bias,
-                    profile=prof,
-                )
-        else:
-            raw_pts = _route_global_corridor(
-                start=s,
-                dest=d,
-                bergs=bergs,
-                ice_w=ice_w,
-                berg_w=berg_w,
-                dist_w=dist_w,
-                berg_radius=berg_radius,
-                corridor_bias=bias,
-                profile=prof,
-            )
+    for rid, name, ice_w, berg_w, dist_w, berg_radius, speed, fuel_rate in specs:
+        raw_pts = astar(
+            start=s,
+            dest=d,
+            bergs=bergs,
+            ice_w=ice_w,
+            berg_w=berg_w,
+            dist_w=dist_w,
+            berg_radius=berg_radius,
+            step=0.18,
+            corridor_bias=0.0,
+            max_iter=15000,
+        )
 
-        if not raw_pts or len(raw_pts) < 2:
-            raise ValueError(f"Unable to find navigable sea route between {start} and {dest}")
+        nm = 0.0
+        for a, b in zip(raw_pts, raw_pts[1:]):
+            nm += _haversine_nm(a, b)
 
-        # Enforce hard segment-level land constraint
-        for p_a, p_b in zip(raw_pts, raw_pts[1:]):
-            if is_segment_land(p_a, p_b, num_samples=10):
-                print(f"[ROUTER-WARNING] Route '{name}' segment between {p_a} and {p_b} touches land cell!")
-
-        # Distance
-        nm = sum(_haversine_nm(a, b) for a, b in zip(raw_pts, raw_pts[1:]))
-
-        # ── Physical fuel model (not nm × constant) ───────────────────────
-        speed_kts = PROFILE_SPEEDS[prof]
-        fuel_data = route_fuel(raw_pts, speed_kts, _haversine_nm)
-
-        eta       = fuel_data["eta_hours"]
-        total_fuel = fuel_data["total_mt"]
-
+        eta = nm / speed if speed else nm
+        fuel = nm * fuel_rate
         dynamic_risk = _calculate_dynamic_risk(raw_pts, bergs, rid)
 
         out.append(
@@ -630,30 +248,10 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                 "name": name,
                 "distanceNm": round(nm, 1),
                 "etaHours": round(eta, 1),
-                "fuelMt": round(total_fuel, 1),
+                "fuelMt": round(fuel, 1),
                 "riskScore": dynamic_risk,
-                "avgSpeedKts": speed_kts,
-                "avgSic": round(fuel_data.get("avg_sic", 0.0) * 100.0, 1),
-                "maxSic": round(fuel_data.get("max_sic", 0.0) * 100.0, 1),
-                "fuelBreakdown": {
-                    "baseMt":       fuel_data["base_mt"],
-                    "iceAddedMt":   fuel_data["ice_added_mt"],
-                    "weatherAddedMt": fuel_data["weather_added_mt"],
-                },
                 "points": [{"lat": round(p[0], 4), "lon": round(p[1], 4)} for p in raw_pts],
             }
         )
-
-    # ── Sanity check: warn if profiles produce identical results ─────────
-    fuels = [r["fuelMt"] for r in out]
-    etas  = [r["etaHours"] for r in out]
-    if len(set(fuels)) == 1:
-        print("[ROUTER-WARNING] All profiles produced identical fuel values – check fuel model!")
-    if len(set(etas)) == 1:
-        print("[ROUTER-WARNING] All profiles produced identical ETAs – check speed params!")
-
-    t_end = time.perf_counter()
-    compute_ms = round((t_end - t_start) * 1000.0, 2)
-    print(f"[ROUTER] Successfully computed {len(out)} routes in {compute_ms} ms")
 
     return out

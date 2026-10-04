@@ -2,162 +2,201 @@
 
 import { useMemo, useRef } from "react";
 import { useFrame, type ThreeEvent } from "@react-three/fiber";
-import { Html } from "@react-three/drei";
 import * as THREE from "three";
 import type { Iceberg } from "@/lib/mockData";
-import { latLonToScene } from "@/lib/geo";
+import { haversineNm, latLonToScene } from "@/lib/geo";
 import { usePolarisStore } from "@/lib/store";
 
-const hash = (x: number, y: number, z: number) => { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return h - Math.floor(h); };
+const hash = (x: number, y: number, z: number) => {
+  const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return h - Math.floor(h);
+};
 const sm = (t: number) => t * t * (3 - 2 * t);
 function vnoise(x: number, y: number, z: number) {
-  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
-  const xf = sm(x - xi), yf = sm(y - yi), zf = sm(z - zi);
+  const xi = Math.floor(x),
+    yi = Math.floor(y),
+    zi = Math.floor(z);
+  const xf = sm(x - xi),
+    yf = sm(y - yi),
+    zf = sm(z - zi);
   let r = 0;
-  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++)
-    r += (i ? xf : 1 - xf) * (j ? yf : 1 - yf) * (k ? zf : 1 - zf) * hash(xi + i, yi + j, zi + k);
+  for (let i = 0; i < 2; i++)
+    for (let j = 0; j < 2; j++)
+      for (let k = 0; k < 2; k++)
+        r +=
+          (i ? xf : 1 - xf) *
+          (j ? yf : 1 - yf) *
+          (k ? zf : 1 - zf) *
+          hash(xi + i, yi + j, zi + k);
   return r;
 }
 function fbm(x: number, y: number, z: number, oct = 4) {
-  let a = 0.5, f = 1, s = 0;
-  for (let i = 0; i < oct; i++) { s += a * vnoise(x * f, y * f, z * f); f *= 2; a *= 0.5; }
+  let a = 0.5,
+    f = 1,
+    s = 0;
+  for (let i = 0; i < oct; i++) {
+    s += a * vnoise(x * f, y * f, z * f);
+    f *= 2;
+    a *= 0.5;
+  }
   return s;
 }
 
-type IcebergKind = "berg" | "spire" | "shelf";
+type IcebergKind = "tabular" | "berg";
 
 const CLIP_ABOVE = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 const CLIP_BELOW = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
-const COL_SNOW = new THREE.Color("#f4f9ff");
-const COL_SIDE = new THREE.Color("#8fb0cc");
-const COL_SHALLOW = new THREE.Color("#bfeaf5");
-const COL_MID = new THREE.Color("#4cb4d6");
-const COL_DEEP = new THREE.Color("#1c4f86");
-const COL_STREAK = new THREE.Color("#7ee8ff");
+const COL_SNOW = new THREE.Color("#f8fafc");
+const COL_SIDE = new THREE.Color("#94a3b8");
+const COL_SHALLOW = new THREE.Color("#7dd3fc");
+const COL_MID = new THREE.Color("#0284c7");
+const COL_DEEP = new THREE.Color("#0c4a6e");
+const COL_STREAK = new THREE.Color("#38bdf8");
 
-function snowPeaks(
-  hx: number,
-  hz: number,
-  px: number,
-  pz: number,
-  y: number,
-  height: number,
-  o: number,
-  kind: IcebergKind
-) {
-  const peakCount = kind === "shelf" ? 3 : kind === "spire" ? 4 : 6;
-  let cluster = 0;
-  let dominant = 0;
-  for (let k = 0; k < peakCount; k++) {
-    const ang = o * 0.4 + k * ((Math.PI * 2) / peakCount);
-    const cx = Math.cos(ang) * 0.42;
-    const cz = Math.sin(ang) * 0.42;
-    const dist = Math.hypot(hx - cx, hz - cz);
-    const h = fbm(px * 0.35 + cx + o, pz * 0.35 + cz + o, k * 1.7, 4);
-    const spike = Math.exp(-dist * (kind === "spire" ? 5.2 : 3.8)) * Math.pow(h, 1.35);
-    if (k === 0) dominant = spike;
-    cluster += spike * (k === 0 ? 1.55 : 0.72);
-  }
-  const ridge = 1 - Math.abs(2 * fbm(px * 0.28 + o, pz * 0.28 + o, 2.1, 5) - 1);
-  const rimBoost = Math.pow(ridge, 2.4) * (0.35 + dominant * 1.1);
-  const topScale = kind === "shelf" ? 0.18 : kind === "spire" ? 1.35 : 0.52;
-  const ledgeStep =
-    kind === "shelf"
-      ? Math.floor(y * 8 + fbm(hx * 4 + o, hz * 4 + o, 1.2) * 3) * 0.06
-      : Math.floor(y * 6 + fbm(hx * 3 + o, hz * 3 + o, 0.4) * 2) * 0.05;
-  const peakLift =
-    kind === "shelf"
-      ? cluster * height * 0.35 + rimBoost * height * 0.25
-      : (cluster + rimBoost) * height * (kind === "spire" ? 1.65 : 1.15);
-  return y * height * topScale + peakLift + ledgeStep * height;
-}
-
+/**
+ * Creates authentic polar iceberg geometry:
+ * - Tabular: Irregular polygon footprint (16-20 vertices with noise), extruded flat top table with steep rough sides, subtle bevel.
+ * - Berg: Chunky icosahedron-based blocks with natural noise displacement and flat facets.
+ * - Submerged keel: ~85% total volume below water level.
+ */
 export function createIceberg({
   radius = 1,
-  height = 0.8,
+  heightRatio = 0.16, // Visible freeboard strictly 10% to 20% of width
   seed = 1,
-  detail = 5,
-  kind = "berg" as IcebergKind,
+  detail = 4,
+  kind = "tabular" as IcebergKind,
 } = {}) {
-  const o = seed * 17.31;
-  const geo = new THREE.IcosahedronGeometry(1, detail);
-  const p = geo.attributes.position;
-  const v = new THREE.Vector3();
-  const subRatio = kind === "shelf" ? 2.4 : kind === "spire" ? 4.2 : 5.2;
+  const o = seed * 19.41;
 
-  for (let i = 0; i < p.count; i++) {
-    v.fromBufferAttribute(p as THREE.BufferAttribute, i);
-    const y = v.y;
-    const len = Math.hypot(v.x, v.z) || 1e-6;
-    const hx = v.x / len;
-    const hz = v.z / len;
-    const az = Math.atan2(v.z, v.x);
-
-    const outline = 1 + 0.48 * (fbm(hx * 1.6 + o, hz * 1.6 + o, 0) - 0.5);
-    const facets = 0.74 + 0.26 * Math.abs(Math.sin(az * 7 + o * 0.65));
-
-    let taper =
-      kind === "shelf"
-        ? 1 - 0.05 * Math.pow(Math.abs(y), 1.05)
-        : kind === "spire"
-          ? Math.max(0.2, 1 - 0.52 * Math.pow(Math.abs(y), 2.1))
-          : Math.max(0.14, 1 - 0.32 * Math.pow(Math.abs(y), 2.8));
-
-    let rad = radius * outline * facets * taper;
-    rad *= 1 + 0.28 * (fbm(hx * 5 + o, hz * 5 + o, y * 1.5) - 0.5);
-
-    const px = hx * rad;
-    const pz = hz * rad;
-    let yw;
-
-    if (y >= 0) {
-      yw = snowPeaks(hx, hz, px, pz, y, height, o, kind);
-    } else {
-      const depthFrac = Math.min(1, Math.abs(y));
-      const wedge = 1 - 0.65 * Math.pow(depthFrac, 1.2);
-      const groove = 1 + 0.1 * Math.sin(az * 16 + o * 2.3 + depthFrac * 11);
-      rad *= wedge * groove;
-      const ledge =
-        Math.floor(depthFrac * 9 + fbm(hx * 6 + o, hz * 6 + o, 4.2) * 2.5) * 0.045;
-      const px2 = hx * rad;
-      const pz2 = hz * rad;
-      yw =
-        -depthFrac * height * subRatio * (0.9 + 0.22 * fbm(px2 * 0.25 + o, pz2 * 0.25 + o, 6.4)) -
-        ledge * height * 0.35;
-      p.setXYZ(i, px2, yw, pz2);
-      continue;
+  if (kind === "tabular") {
+    // Generate Tabular iceberg via irregular polygon extrusion & displacement
+    const numVerts = 18;
+    const shape = new THREE.Shape();
+    const pts2D: THREE.Vector2[] = [];
+    for (let i = 0; i < numVerts; i++) {
+      const angle = (i / numVerts) * Math.PI * 2;
+      const nx = Math.cos(angle);
+      const nz = Math.sin(angle);
+      const radNoise = 0.85 + 0.3 * (fbm(nx * 2.2 + o, nz * 2.2 + o, 0.5) - 0.5);
+      const r = radius * radNoise;
+      pts2D.push(new THREE.Vector2(nx * r, nz * r));
     }
-    p.setXYZ(i, px, yw, pz);
-  }
-  geo.computeVertexNormals();
+    shape.setFromPoints(pts2D);
 
-  const n = geo.attributes.normal;
-  const col = new Float32Array(p.count * 3);
-  const c = new THREE.Color();
-  const maxSub = height * subRatio;
+    const aboveHeight = radius * heightRatio * 2.0;
+    const belowDepth = radius * 2.8;
 
-  for (let i = 0; i < p.count; i++) {
-    const py = p.getY(i);
-    const nx = (n as THREE.BufferAttribute).getX(i);
-    const ny = (n as THREE.BufferAttribute).getY(i);
-    const nz = (n as THREE.BufferAttribute).getZ(i);
-    const up = Math.max(0, ny);
+    const geo = new THREE.ExtrudeGeometry(shape, {
+      depth: aboveHeight + belowDepth,
+      bevelEnabled: true,
+      bevelSegments: 2,
+      steps: 3,
+      bevelSize: radius * 0.08,
+      bevelThickness: radius * 0.08,
+    });
 
-    if (py >= 0) {
-      c.copy(COL_SIDE).lerp(COL_SNOW, Math.pow(up, 0.85 + (1 - up) * 0.35));
-      if (up > 0.55) c.lerp(COL_SNOW, (up - 0.55) / 0.45);
-    } else {
-      const d = Math.min(1, -py / maxSub);
-      if (d < 0.45) c.copy(COL_SHALLOW).lerp(COL_MID, d / 0.45);
-      else c.copy(COL_MID).lerp(COL_DEEP, (d - 0.45) / 0.55);
-      const ridge = Math.min(1, (Math.abs(nx) + Math.abs(nz)) * 0.85);
-      c.lerp(COL_STREAK, ridge * 0.35 * (1 - d * 0.4));
+    // Translate so z=0 in extrusion aligns with waterline (y=0 in 3D world)
+    geo.translate(0, 0, -belowDepth);
+    geo.rotateX(-Math.PI / 2);
+
+    // Apply natural facet displacement to top and underwater keel
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const px = p.getX(i);
+      const py = p.getY(i);
+      const pz = p.getZ(i);
+      if (py >= 0) {
+        // Subtle top table undulation
+        const topN = fbm(px * 0.4 + o, pz * 0.4 + o, 1.0) * 0.15;
+        p.setY(i, Math.max(0.05, py + topN * aboveHeight));
+      } else {
+        // Keel inward tapering
+        const depthFrac = Math.min(1.0, Math.abs(py) / belowDepth);
+        const taper = 1.0 - 0.35 * Math.pow(depthFrac, 1.2);
+        p.setX(i, px * taper);
+        p.setZ(i, pz * taper);
+      }
     }
-    col.set([c.r, c.g, c.b], i * 3);
+    geo.computeVertexNormals();
+
+    // Vertex color gradient
+    const col = new Float32Array(p.count * 3);
+    const c = new THREE.Color();
+    for (let i = 0; i < p.count; i++) {
+      const py = p.getY(i);
+      if (py >= 0) {
+        c.copy(COL_SIDE).lerp(COL_SNOW, Math.min(1.0, py / (aboveHeight || 1)));
+      } else {
+        const d = Math.min(1.0, Math.abs(py) / belowDepth);
+        if (d < 0.4) c.copy(COL_SHALLOW).lerp(COL_MID, d / 0.4);
+        else c.copy(COL_MID).lerp(COL_DEEP, (d - 0.4) / 0.6);
+      }
+      col.set([c.r, c.g, c.b], i * 3);
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    return geo;
+  } else {
+    // Chunky rounded irregular block
+    const geo = new THREE.IcosahedronGeometry(1, detail);
+    const p = geo.attributes.position;
+    const v = new THREE.Vector3();
+
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p as THREE.BufferAttribute, i);
+      const y = v.y;
+      const len = Math.hypot(v.x, v.z) || 1e-6;
+      const hx = v.x / len;
+      const hz = v.z / len;
+      const az = Math.atan2(v.z, v.x);
+
+      const outline = 1 + 0.35 * (fbm(hx * 1.8 + o, hz * 1.8 + o, 0) - 0.5);
+      const facets = 0.85 + 0.15 * Math.abs(Math.sin(az * 5 + o * 0.65));
+      let rad = radius * outline * facets;
+
+      if (y >= 0) {
+        rad *= 0.88 - 0.15 * Math.pow(y, 1.5);
+        const px = hx * rad;
+        const pz = hz * rad;
+        const surfaceNoise = 0.85 + 0.3 * fbm(hx * 3.0 + o, hz * 3.0 + o, y * 2.0);
+        const yw = Math.max(0.04, y * radius * heightRatio * 2.0 * surfaceNoise);
+        p.setXYZ(i, px, yw, pz);
+      } else {
+        const depthFrac = Math.min(1, Math.abs(y));
+        const keelWedge = 1.05 - 0.4 * Math.pow(depthFrac, 1.3);
+        rad *= keelWedge;
+        const px = hx * rad;
+        const pz = hz * rad;
+        const keelNoise = 0.9 + 0.2 * fbm(px * 0.3 + o, pz * 0.3 + o, 4.0);
+        const yw = -depthFrac * radius * 3.0 * keelNoise;
+        p.setXYZ(i, px, yw, pz);
+      }
+    }
+    geo.computeVertexNormals();
+
+    const n = geo.attributes.normal;
+    const col = new Float32Array(p.count * 3);
+    const c = new THREE.Color();
+    const maxSub = radius * 3.0;
+
+    for (let i = 0; i < p.count; i++) {
+      const py = p.getY(i);
+      const nx = (n as THREE.BufferAttribute).getX(i);
+      const nz = (n as THREE.BufferAttribute).getZ(i);
+      if (py >= 0) {
+        c.copy(COL_SIDE).lerp(COL_SNOW, 0.8);
+      } else {
+        const d = Math.min(1, -py / maxSub);
+        if (d < 0.4) c.copy(COL_SHALLOW).lerp(COL_MID, d / 0.4);
+        else c.copy(COL_MID).lerp(COL_DEEP, (d - 0.4) / 0.6);
+        const ridge = Math.min(1, (Math.abs(nx) + Math.abs(nz)) * 0.85);
+        c.lerp(COL_STREAK, ridge * 0.25 * (1 - d * 0.4));
+      }
+      col.set([c.r, c.g, c.b], i * 3);
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    return geo;
   }
-  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-  return geo;
 }
 
 type IceMatProps = {
@@ -169,15 +208,15 @@ export function IceSurfaceMaterial({ selected, highRisk }: IceMatProps) {
   return (
     <meshPhysicalMaterial
       vertexColors
-      roughness={0.32}
-      metalness={0}
-      clearcoat={0.5}
-      clearcoatRoughness={0.28}
+      roughness={0.35}
+      metalness={0.02}
+      clearcoat={0.6}
+      clearcoatRoughness={0.25}
       flatShading
       clippingPlanes={[CLIP_ABOVE]}
       clipShadows
       emissive={selected ? "#0284c7" : highRisk ? "#38bdf8" : "#000000"}
-      emissiveIntensity={selected ? 0.4 : highRisk ? 0.25 : 0}
+      emissiveIntensity={selected ? 0.45 : highRisk ? 0.2 : 0}
     />
   );
 }
@@ -186,212 +225,136 @@ export function IceSubmergedMaterial() {
   return (
     <meshPhysicalMaterial
       vertexColors
-      roughness={0.28}
-      metalness={0}
-      clearcoat={0.55}
-      clearcoatRoughness={0.22}
-      flatShading
+      roughness={0.15}
+      metalness={0.05}
+      transmission={0.65}
+      thickness={2.5}
+      ior={1.31}
       transparent
-      opacity={0.82}
-      depthWrite={false}
+      opacity={0.88}
       clippingPlanes={[CLIP_BELOW]}
-      clipShadows
+      side={THREE.DoubleSide}
+      depthWrite={false}
     />
   );
 }
 
-function IcebergWaterEffectsInner({ footprint }: { footprint: number }) {
-  const rayRefs = useRef<THREE.Mesh[]>([]);
-  const rays = [0, 1.05, -0.9];
-
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-    rayRefs.current.forEach((m, i) => {
-      const mat = m.material as THREE.MeshBasicMaterial;
-      if (mat) mat.opacity = 0.04 + Math.sin(t * 0.7 + i) * 0.015;
-    });
-  });
+function IcebergFoamRing({ radius }: { radius: number }) {
+  const quality = usePolarisStore((s) => s.graphicsQuality || "high");
+  if (quality === "low") return null;
 
   return (
-    <group>
-      <mesh position={[0, -footprint * 0.15, 0]}>
-        <sphereGeometry args={[footprint * 1.05, 16, 12]} />
-        <meshBasicMaterial color="#22d3ee" transparent opacity={0.06} depthWrite={false} />
-      </mesh>
-      {rays.map((off, i) => (
-        <mesh
-          key={i}
-          ref={(el) => {
-            if (el) rayRefs.current[i] = el;
-          }}
-          position={[off * footprint * 0.35, footprint * 0.55, off * footprint * 0.2]}
-          rotation={[0, off * 0.4, 0]}
-        >
-          <coneGeometry args={[footprint * 0.22, footprint * 1.8, 8, 1, true]} />
-          <meshBasicMaterial
-            color="#a5f3fc"
-            transparent
-            opacity={0.04}
-            depthWrite={false}
-            blending={THREE.AdditiveBlending}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-function IcebergWaterEffects({ footprint, quality }: { footprint: number; quality: string }) {
-  if (quality === "low" || footprint < 3.5 || footprint > 40) return null;
-  return <IcebergWaterEffectsInner footprint={footprint} />;
-}
-
-export function IcebergFoamRing({ radius }: { radius: number }) {
-  return (
-    <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-      <torusGeometry args={[radius * 1.38, Math.max(0.08, radius * 0.04), 8, 40]} />
-      <meshBasicMaterial color="#ffffff" transparent opacity={0.42} depthWrite={false} />
+    <mesh position={[0, 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[radius * 0.96, radius * 1.14, 32]} />
+      <meshBasicMaterial
+        color="#e0f2fe"
+        transparent
+        opacity={0.35}
+        depthWrite={false}
+      />
     </mesh>
   );
 }
 
-type IceBodyProps = {
-  geometry: THREE.BufferGeometry;
-  scale: [number, number, number];
-  rotation?: [number, number, number];
-  quality: string;
-  footprint: number;
-  interactive?: boolean;
-  selected?: boolean;
-  highRisk?: boolean;
-  onClick?: (e: ThreeEvent<MouseEvent>) => void;
-  onPointerOver?: (e: ThreeEvent<MouseEvent>) => void;
-  onPointerOut?: () => void;
-  showEffects?: boolean;
-};
-
-export function IcebergBodyLayers({
-  geometry,
-  scale,
-  rotation = [0, 0, 0],
-  quality,
-  footprint,
-  interactive,
-  selected,
-  highRisk,
-  onClick,
-  onPointerOver,
-  onPointerOut,
-  showEffects = true,
-}: IceBodyProps) {
-  const worldFoot = Math.max(scale[0], scale[2]) * footprint;
-
-  return (
-    <group scale={scale} rotation={rotation}>
-      <mesh
-        geometry={geometry}
-        castShadow
-        receiveShadow
-        onClick={interactive ? onClick : undefined}
-        onPointerOver={interactive ? onPointerOver : undefined}
-        onPointerOut={interactive ? onPointerOut : undefined}
-      >
-        <IceSurfaceMaterial selected={selected} highRisk={highRisk} />
-      </mesh>
-      <mesh geometry={geometry} receiveShadow>
-        <IceSubmergedMaterial />
-      </mesh>
-      {showEffects && <IcebergWaterEffects footprint={worldFoot} quality={quality} />}
-      <IcebergFoamRing radius={footprint} />
-    </group>
-  );
-}
-
 export const SHARED_GEOMETRIES = {
-  high: [] as { geo: THREE.BufferGeometry, class: string }[],
-  low: [] as { geo: THREE.BufferGeometry, class: string }[]
+  high: [] as { geo: THREE.BufferGeometry; class: string; kind: IcebergKind }[],
+  low: [] as { geo: THREE.BufferGeometry; class: string; kind: IcebergKind }[],
 };
+
 if (typeof window !== "undefined") {
-  for (const q of [3, 5]) {
-    const list = q === 5 ? SHARED_GEOMETRIES.high : SHARED_GEOMETRIES.low;
+  for (const q of [3, 4]) {
+    const list = q === 4 ? SHARED_GEOMETRIES.high : SHARED_GEOMETRIES.low;
+    // 3 Tabular variants for large icebergs (A83, A85, D33A, etc.)
     for (let v = 1; v <= 3; v++)
       list.push({
-        geo: createIceberg({ radius: 1, height: 0.85, seed: v, detail: q, kind: "berg" }),
-        class: "medium",
+        geo: createIceberg({ radius: 1, heightRatio: 0.15, seed: v, detail: q, kind: "tabular" }),
+        class: "large",
+        kind: "tabular",
       });
+    // 3 Blocky / Rounded variants for medium and small bergs (B22F, C16, etc.)
     for (let v = 4; v <= 6; v++)
       list.push({
-        geo: createIceberg({ radius: 1, height: 0.65, seed: v, detail: q, kind: "berg" }),
-        class: "large",
+        geo: createIceberg({ radius: 1, heightRatio: 0.17, seed: v, detail: q, kind: "berg" }),
+        class: "medium",
+        kind: "berg",
       });
-    for (let v = 7; v <= 8; v++)
+    for (let v = 7; v <= 9; v++)
       list.push({
-        geo: createIceberg({ radius: 0.42, height: 2.2, seed: v, detail: q, kind: "spire" }),
-        class: "spire",
+        geo: createIceberg({ radius: 1, heightRatio: 0.16, seed: v, detail: q, kind: "berg" }),
+        class: "small",
+        kind: "berg",
       });
   }
 }
 
-export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
+export function IcebergMesh({
+  iceberg,
+  showLabel,
+}: {
+  iceberg: Iceberg;
+  showLabel: boolean;
+}) {
   const bodyRef = useRef<THREE.Group>(null);
   const selected = usePolarisStore((s) => s.selectedIcebergId === iceberg.id);
   const select = usePolarisStore((s) => s.selectIceberg);
   const showPred = usePolarisStore((s) => s.layers.predictions);
+  const showRiskZones = usePolarisStore((s) => s.layers.riskZones);
   const [x, , z] = latLonToScene(iceberg.lat, iceberg.lon);
 
-  const baseScale = Math.max(2.6, 2.0 + (iceberg.diameterNm || 1) * 1.5);
-  const sizeClass =
-    baseScale > 6 ? "large" : baseScale > 4.5 ? "medium" : "spire";
+  const dangerRadius = iceberg.dangerRadiusNm || 7.0;
+
+  // Visual footprint radius: max(0.45 * dangerRadius, 5.0) capped at 0.75 * dangerRadius
+  const visualRadius = THREE.MathUtils.clamp(
+    dangerRadius * 0.48,
+    4.5,
+    dangerRadius * 0.75
+  );
+
+  // Tabular classification: name starts with A, D or diameter >= 3 NM
+  const isTabular =
+    iceberg.name?.startsWith("A") ||
+    iceberg.name?.startsWith("D") ||
+    (iceberg.diameterNm && iceberg.diameterNm >= 2.5);
+
+  const sizeClass = isTabular ? "large" : visualRadius > 6.0 ? "medium" : "small";
   const quality = usePolarisStore((s) => s.graphicsQuality || "high");
 
   const geo = useMemo(() => {
-    let hash = 0;
-    for (let i = 0; i < iceberg.id.length; i++) hash += iceberg.id.charCodeAt(i);
+    let hashVal = 0;
+    for (let i = 0; i < iceberg.id.length; i++) hashVal += iceberg.id.charCodeAt(i);
     const list = quality === "low" ? SHARED_GEOMETRIES.low : SHARED_GEOMETRIES.high;
     const valid = list.filter((g) => g.class === sizeClass);
-    return valid[hash % valid.length].geo;
+    return (valid[hashVal % valid.length] || list[0]).geo;
   }, [iceberg.id, sizeClass, quality]);
 
-  const meshScale = useMemo((): [number, number, number] => {
-    if (sizeClass === "spire") {
-      const r = baseScale * 0.52;
-      return [r, baseScale * 1.35, r];
-    }
-    if (sizeClass === "large") {
-      return [baseScale, baseScale * 0.72, baseScale];
-    }
-    return [baseScale, baseScale * 0.88, baseScale];
-  }, [baseScale, sizeClass]);
-
   const pathPts = useMemo(() => {
+    if (!iceberg.predictedPath) return [];
     return iceberg.predictedPath.map((p) => {
       const [px, , pz] = latLonToScene(p.lat, p.lon);
-      return new THREE.Vector3(px, 0.4, pz);
+      return new THREE.Vector3(px, 0.3, pz);
     });
   }, [iceberg.predictedPath]);
 
   useFrame(({ clock }) => {
-    const t = clock.getElapsedTime() + iceberg.lat * 10;
+    const t = clock.getElapsedTime() + iceberg.lat * 5;
     if (bodyRef.current) {
-      bodyRef.current.position.y = Math.sin(t * 0.8) * 0.06;
-      bodyRef.current.rotation.z = Math.sin(t * 0.5) * 0.015;
+      bodyRef.current.position.y = Math.sin(t * 0.6) * 0.03;
+      bodyRef.current.rotation.z = Math.sin(t * 0.3) * 0.008;
     }
   });
 
   return (
     <group position={[x, 0, z]}>
-      <group ref={bodyRef}>
-        <IcebergBodyLayers
+      {/* 3D Iceberg Body (Solid tabular / chunky mass with underwater keel) */}
+      <group
+        ref={bodyRef}
+        scale={[visualRadius, visualRadius, visualRadius]}
+        rotation={[0, (iceberg.headingDeg * Math.PI) / 180, 0]}
+      >
+        <mesh
           geometry={geo}
-          scale={meshScale}
-          rotation={[0, (iceberg.headingDeg * Math.PI) / 180, 0]}
-          quality={quality}
-          footprint={1.38}
-          interactive
-          showEffects
-          selected={selected}
-          highRisk={iceberg.highRisk}
+          castShadow
+          receiveShadow
           onClick={(e) => {
             e.stopPropagation();
             select(iceberg.id);
@@ -403,28 +366,54 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
           onPointerOut={() => {
             document.body.style.cursor = "auto";
           }}
-        />
+        >
+          <IceSurfaceMaterial selected={selected} highRisk={iceberg.highRisk} />
+        </mesh>
+        <mesh geometry={geo} receiveShadow>
+          <IceSubmergedMaterial />
+        </mesh>
+        <IcebergFoamRing radius={1.12} />
       </group>
 
-      {/* Selected Target Ring */}
+      {/* Danger Zone Ring: Flat on the water surface at true radius */}
+      {showRiskZones && (
+        <group position={[0, 0.04, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]}>
+            <circleGeometry args={[dangerRadius, 48]} />
+            <meshBasicMaterial
+              color={iceberg.highRisk ? "#ef4444" : "#eab308"}
+              transparent
+              opacity={0.08}
+              depthWrite={false}
+            />
+          </mesh>
+          <mesh rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[dangerRadius * 0.96, dangerRadius, 48]} />
+            <meshBasicMaterial
+              color={iceberg.highRisk ? "#ef4444" : "#eab308"}
+              transparent
+              opacity={0.55}
+              depthWrite={false}
+            />
+          </mesh>
+        </group>
+      )}
+
+      {/* Selected Iceberg Indicator Ring */}
       {selected && (
-        <mesh position={[0, 0.25, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[meshScale[0] * 1.5, meshScale[0] * 1.68, 32]} />
-          <meshBasicMaterial color="#38bdf8" />
+        <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[visualRadius * 1.25, visualRadius * 1.4, 32]} />
+          <meshBasicMaterial color="#38bdf8" transparent opacity={0.9} />
         </mesh>
       )}
 
-      {/* Predicted Drift Trajectory */}
+      {/* Predicted Drift Trajectory Line */}
       {showPred && pathPts.length > 1 && (
         <line>
           <bufferGeometry attach="geometry">
             <bufferAttribute
               attach="attributes-position"
-              array={
-                new Float32Array(
-                  pathPts.flatMap((p) => [p.x - x, p.y, p.z - z])
-                )
-              }
+              array={new Float32Array(pathPts.flatMap((p) => [p.x - x, p.y, p.z - z]))}
               count={pathPts.length}
               itemSize={3}
             />
@@ -439,24 +428,114 @@ export function IcebergMesh({ iceberg }: { iceberg: Iceberg }) {
         </line>
       )}
 
-      {/* Floating Iceberg Label */}
-      <Html position={[0, baseScale * 1.25, 0]} center distanceFactor={15}>
-        <div className="px-2 py-1 bg-black/60 backdrop-blur-sm border border-white/20 rounded text-[10px] font-mono text-white/90 whitespace-nowrap shadow-lg">
-          {iceberg.name}
-        </div>
-      </Html>
+      {/* Floating 3D Sprite Iceberg Label (Only nearest 5 or selected) */}
+      {showLabel && (
+        <IcebergSpriteLabel
+          name={iceberg.name}
+          isHighRisk={iceberg.highRisk}
+          isSelected={selected}
+          yPos={visualRadius * 0.45 + 1.2}
+        />
+      )}
     </group>
+  );
+}
+
+function IcebergSpriteLabel({
+  name,
+  isHighRisk,
+  isSelected,
+  yPos,
+}: {
+  name: string;
+  isHighRisk: boolean;
+  isSelected: boolean;
+  yPos: number;
+}) {
+  const texture = useMemo(() => {
+    if (typeof document === "undefined") return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.fillStyle = isSelected
+      ? "rgba(8, 47, 73, 0.92)"
+      : isHighRisk
+      ? "rgba(69, 10, 10, 0.88)"
+      : "rgba(15, 23, 42, 0.88)";
+    ctx.strokeStyle = isSelected
+      ? "#38bdf8"
+      : isHighRisk
+      ? "#ef4444"
+      : "rgba(255, 255, 255, 0.3)";
+    ctx.lineWidth = 3;
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(4, 4, 248, 56, 12);
+    } else {
+      ctx.rect(4, 4, 248, 56);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isSelected
+      ? "#bae6fd"
+      : isHighRisk
+      ? "#fca5a5"
+      : "#f8fafc";
+    ctx.font = "bold 22px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`${name}${isHighRisk ? " ⚠️" : ""}`, 128, 33);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }, [name, isHighRisk, isSelected]);
+
+  if (!texture) return null;
+
+  return (
+    <sprite position={[0, yPos, 0]} scale={[7.0, 1.8, 1]}>
+      <spriteMaterial map={texture} transparent depthTest={false} fog={false} />
+    </sprite>
   );
 }
 
 export function IcebergField() {
   const icebergs = usePolarisStore((s) => s.icebergs);
+  const vessel = usePolarisStore((s) => s.vessel);
+  const selectedIcebergId = usePolarisStore((s) => s.selectedIcebergId);
+  const cameraTargetCoord = usePolarisStore((s) => s.cameraTargetCoord);
   const visible = usePolarisStore((s) => s.layers.icebergs);
+
+  const centerLat = cameraTargetCoord ? cameraTargetCoord[0] : vessel.lat;
+  const centerLon = cameraTargetCoord ? cameraTargetCoord[1] : vessel.lon;
+
+  // Filter icebergs within 50 NM of ship (or selected iceberg), sort by distance
+  const nearbyIcebergs = useMemo(() => {
+    if (!icebergs || icebergs.length === 0) return [];
+    const center = { lat: centerLat, lon: centerLon };
+    const items = icebergs.map((ib) => ({
+      ib,
+      dist: haversineNm(center, { lat: ib.lat, lon: ib.lon }),
+    }));
+    return items
+      .filter((item) => item.dist <= 50 || item.ib.id === selectedIcebergId)
+      .sort((a, b) => a.dist - b.dist);
+  }, [icebergs, centerLat, centerLon, selectedIcebergId]);
+
   if (!visible) return null;
+
   return (
     <group>
-      {icebergs.map((ib) => (
-        <IcebergMesh key={ib.id} iceberg={ib} />
+      {nearbyIcebergs.map(({ ib }, idx) => (
+        <IcebergMesh
+          key={ib.id}
+          iceberg={ib}
+          showLabel={idx < 5 || ib.id === selectedIcebergId}
+        />
       ))}
     </group>
   );

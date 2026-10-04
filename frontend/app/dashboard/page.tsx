@@ -8,12 +8,10 @@ import {
   MapPin,
   Compass,
   Layers,
-  ShieldAlert,
   FileText,
   Eye,
   EyeOff,
   Trash2,
-  CheckCircle2,
   ChevronRight,
   Route,
   PenTool,
@@ -21,7 +19,7 @@ import {
   Bird,
   Waves,
 } from "lucide-react";
-import { fetchIcebergs, fetchRoutes } from "@/lib/api";
+import { fetchIcebergs } from "@/lib/api";
 import { usePolarisStore } from "@/lib/store";
 import { AlertBanner } from "@/components/HUD/AlertBanner";
 import { AlertHistoryLog } from "@/components/HUD/AlertHistoryLog";
@@ -57,15 +55,12 @@ interface IceCell {
   sic: number;
 }
 
-interface RouteOption {
-  id: "safest" | "balanced" | "fastest";
-  name: string;
-  distanceNm: number;
-  etaHours: number;
-  fuelMt: number;
-  riskScore: number;
-  points: { lat: number; lon: number }[];
-}
+const PROFILE_CONFIG: Record<string, { label: string; color: string; hex: string }> = {
+  safest:   { label: "Safest",   color: "text-emerald-400", hex: "#22c55e" },
+  balanced: { label: "Balanced", color: "text-amber-400",   hex: "#eab308" },
+  eco:      { label: "Eco",      color: "text-sky-400",     hex: "#38bdf8" },
+  fastest:  { label: "Fastest",  color: "text-rose-400",    hex: "#ef4444" },
+};
 
 export default function HomePage() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -89,17 +84,17 @@ export default function HomePage() {
   const [showExclusionZones, setShowExclusionZones] = useState(true);
 
   // Route pick state
-  const [startCoords, setStartCoords] = useState<[number, number]>([-68.35, -52.45]); // default mock vessel lat/lon
-  const [destCoords, setDestCoords] = useState<[number, number]>([-68.72, -49.55]); // default destination
+  const [startCoords, setStartCoords] = useState<[number, number]>([-68.35, -52.45]);
+  const [destCoords, setDestCoords] = useState<[number, number]>([-64.58, -43.1]);
   const [pickMode, setPickMode] = useState<"none" | "start" | "dest">("none");
 
   // Drawing Exclusion Zones State
   const [isDrawing, setIsDrawing] = useState(false);
-  const [drawingPoints, setDrawingPoints] = useState<[number, number][]>([]); // Array of [lon, lat]
-  const [exclusionZones, setExclusionZones] = useState<[number, number][][]>([]); // Array of polygons (array of [lon, lat])
+  const [drawingPoints, setDrawingPoints] = useState<[number, number][]>([]);
+  const [exclusionZones, setExclusionZones] = useState<[number, number][][]>([]);
   const [warpToast, setWarpToast] = useState<{ lat: number; lon: number } | null>(null);
 
-  // Auto-dismiss warp confirmation toast after 8 seconds
+  // Auto-dismiss warp confirmation toast
   useEffect(() => {
     if (!warpToast) return;
     const timer = setTimeout(() => {
@@ -165,7 +160,7 @@ export default function HomePage() {
       })
       .catch((err) => console.error("Error fetching status:", err));
 
-    // 4. Fetch initial routes with shared cache (only fetches if not already loaded)
+    // 4. Fetch initial routes with shared cache
     fetchRoutesIfNeeded(startCoords, destCoords)
       .catch((err) => console.error("Initial 2D route fetch failed:", err));
   }, []);
@@ -177,7 +172,7 @@ export default function HomePage() {
     const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      preserveDrawingBuffer: true, // Crucial for PDF canvas screenshot export
+      preserveDrawingBuffer: true,
       style: token
         ? `https://api.mapbox.com/styles/v1/mapbox/satellite-v9?access_token=${token}`
         : {
@@ -189,7 +184,7 @@ export default function HomePage() {
                   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 ],
                 tileSize: 256,
-                attribution: "Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+                attribution: "Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics",
               },
             },
             layers: [{ id: "esri-tiles", type: "raster", source: "esri" }],
@@ -206,7 +201,6 @@ export default function HomePage() {
     }
 
     map.on("load", () => {
-      console.log("[MAP_ON_LOAD_START]");
       map.resize();
       // Add source & layers for drawing zone
       map.addSource("drawing-polygon", {
@@ -298,7 +292,6 @@ export default function HomePage() {
 
     // Map Click Listener
     map.on("click", (e) => {
-      // 1. Ignore clicks that landed on marker or popup DOM elements
       const originalTarget = e.originalEvent?.target as HTMLElement | null;
       if (
         originalTarget &&
@@ -312,7 +305,6 @@ export default function HomePage() {
       const clickedLng = e.lngLat.lng;
       const clickedLat = e.lngLat.lat;
 
-      // 2. Handle Drawing Zone
       if (useIsDrawingRef.current) {
         setDrawingPoints((prev) => {
           const next: [number, number][] = [...prev, [clickedLng, clickedLat] as [number, number]];
@@ -322,7 +314,6 @@ export default function HomePage() {
         return;
       }
 
-      // 3. Handle picking start/dest coords
       if (usePickModeRef.current === "start") {
         setStartCoords([+clickedLat.toFixed(4), +clickedLng.toFixed(4)] as [number, number]);
         setPickMode("none");
@@ -333,10 +324,10 @@ export default function HomePage() {
         return;
       }
 
-      // 4. Exclude clicks on existing route lines, exclusion zones, or prediction lines
       const interactiveLayers = [
         "route-safest-layer",
         "route-balanced-layer",
+        "route-eco-layer",
         "route-fastest-layer",
         "exclusion-zones-fill",
         "exclusion-zones-outline",
@@ -354,16 +345,16 @@ export default function HomePage() {
         if (features && features.length > 0) {
           const routeFeature = features.find((f) => f.layer.id.startsWith("route-"));
           if (routeFeature) {
-            const match = routeFeature.layer.id.match(/^route-(safest|balanced|fastest)-layer$/);
+            const match = routeFeature.layer.id.match(/^route-(safest|balanced|eco|fastest)-layer$/);
             if (match) {
-              lockRoute(match[1] as RouteOption["id"]);
+              lockRoute(match[1] as any);
             }
           }
           return;
         }
       }
 
-      // 5. Valid click on the map surface itself: capture lat/lon, set warpTarget in store
+      // Valid map click: warp ship
       const lat = +clickedLat.toFixed(4);
       const lon = +clickedLng.toFixed(4);
       usePolarisStore.getState().setWarpTarget({ lat, lon });
@@ -396,7 +387,6 @@ export default function HomePage() {
     };
   }, []);
 
-  // Sync refs to avoid dependency issues inside map listener
   const useIsDrawingRef = useRef(isDrawing);
   useEffect(() => {
     useIsDrawingRef.current = isDrawing;
@@ -407,7 +397,6 @@ export default function HomePage() {
     usePickModeRef.current = pickMode;
   }, [pickMode]);
 
-  // Update Drawing Visual Layer
   const updateDrawingLayer = (pts: [number, number][]) => {
     const map = mapRef.current;
     if (!map) return;
@@ -528,8 +517,6 @@ export default function HomePage() {
     }
   }, [iceCells, showHeatmap, mapLoaded]);
 
-
-
   // Redraw Selected Iceberg Trajectory
   useEffect(() => {
     const map = mapRef.current;
@@ -544,7 +531,6 @@ export default function HomePage() {
       return;
     }
 
-    // Draw line
     if (pathSrc) {
       pathSrc.setData({
         type: "Feature" as const,
@@ -556,7 +542,6 @@ export default function HomePage() {
       });
     }
 
-    // Draw growing uncertainty cone
     const uncertaintyList = selectedIceberg.uncertainty || [
       { hour: 0, lat: selectedIceberg.lat, lon: selectedIceberg.lon, uncertainty_nm: 0 },
       { hour: 24, lat: selectedIceberg.predictedPath[1]?.lat || selectedIceberg.lat, lon: selectedIceberg.predictedPath[1]?.lon || selectedIceberg.lon, uncertainty_nm: 4.5 },
@@ -622,11 +607,9 @@ export default function HomePage() {
     const map = mapRef.current;
     if (!map) return;
 
-    // Clear previous markers
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
 
-    // Clear previous danger circles source
     if (map.getLayer("risk-circles-layer")) {
       map.removeLayer("risk-circles-layer");
     }
@@ -636,12 +619,10 @@ export default function HomePage() {
 
     if (!showIcebergs || icebergs.length === 0) return;
 
-    // Generate Risk Circles GeoJSON
-    const highRiskBergs = icebergs.filter((ib) => ib.highRisk);
-    const riskCirclesFeatures = highRiskBergs.map((ib) => {
+    const riskCirclesFeatures = icebergs.map((ib) => {
       const lon = ib.lon;
       const lat = ib.lat;
-      const radiusNm = ib.dangerRadiusNm;
+      const radiusNm = ib.dangerRadiusNm || 6.0;
       const points = [];
       const numPoints = 32;
       const radiusDeg = radiusNm / 60.0;
@@ -681,31 +662,103 @@ export default function HomePage() {
       },
     });
 
-    // Create Marker Popups & Points
     icebergs.forEach((ib) => {
-      const popup = new maplibregl.Popup({
-        offset: 25,
-        closeButton: true,
-      }).setText(ib.name);
+      let svgContent = "";
+      if (ib.predictedPath && ib.predictedPath.length >= 2) {
+        const lats = ib.predictedPath.map((p) => p.lat);
+        const lons = ib.predictedPath.map((p) => p.lon);
+        const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+        const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+        const latRange = maxLat - minLat || 0.01;
+        const lonRange = maxLon - minLon || 0.01;
+        const w = 140, h = 60, pad = 8;
+        const getX = (lon: number) => pad + ((lon - minLon) / lonRange) * (w - 2 * pad);
+        const getY = (lat: number) => h - (pad + ((lat - minLat) / latRange) * (h - 2 * pad));
+        const ptsStr = ib.predictedPath.map((p) => `${getX(p.lon)},${getY(p.lat)}`).join(" ");
+        svgContent = `
+          <div style="margin-top: 6px; padding: 4px; background: #0f172a; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
+            <div style="font-size: 8px; color: #94a3b8; font-weight: bold; margin-bottom: 2px;">72H DRIFT TRAJECTORY</div>
+            <svg width="${w}" height="${h}">
+              <polyline points="${ptsStr}" fill="none" stroke="#eab308" stroke-width="1.5" stroke-dasharray="3,2" />
+              ${ib.predictedPath.map((p) => `<circle cx="${getX(p.lon)}" cy="${getY(p.lat)}" r="2" fill="#38bdf8" />`).join("")}
+            </svg>
+          </div>
+        `;
+      }
 
-      const marker = new maplibregl.Marker({ color: "#ef4444" })
+      const htmlContent = `
+        <div style="padding: 8px 10px; font-size: 11px; font-family: monospace; color: white; background: #0f172a; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); min-width: 160px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <strong style="color: ${ib.highRisk ? '#ef4444' : '#eab308'}; font-size: 12px;">${ib.name}</strong>
+            <span style="font-size: 9px; padding: 1px 4px; border-radius: 3px; background: ${ib.highRisk ? 'rgba(239,68,68,0.2)' : 'rgba(234,179,8,0.2)'}; color: ${ib.highRisk ? '#f87171' : '#fde047'};">${(ib.status || 'tracking').toUpperCase()}</span>
+          </div>
+          <div style="font-size: 10px; color: #94a3b8; line-height: 1.4;">
+            <div>ID: <span style="color: #cbd5e1;">${ib.id}</span></div>
+            <div>Pos: <span style="color: #cbd5e1;">${ib.lat.toFixed(2)}°, ${ib.lon.toFixed(2)}°</span></div>
+            <div>Size: <span style="color: #cbd5e1;">${ib.sizeClass || 'medium'} (${ib.diameterNm || 6} NM)</span></div>
+            <div>Danger Radius: <span style="color: #cbd5e1;">${ib.dangerRadiusNm || 6} NM</span></div>
+          </div>
+          ${svgContent}
+        </div>
+      `;
+
+      const popupNode = document.createElement("div");
+      popupNode.innerHTML = htmlContent;
+
+      const popup = new maplibregl.Popup({
+        offset: 20,
+        closeButton: true,
+        className: "hud-popup-container",
+      }).setDOMContent(popupNode);
+
+      const color = ib.highRisk ? "#ef4444" : "#eab308";
+      const marker = new maplibregl.Marker({ color })
         .setLngLat([ib.lon, ib.lat])
         .setPopup(popup)
         .addTo(map);
 
-      // Save selected iceberg state on popup open
-      popup.on("open", () => {
-        setSelectedIceberg(ib);
-      });
-      popup.on("close", () => {
-        setSelectedIceberg((prev) => (prev?.id === ib.id ? null : prev));
-      });
+      popup.on("open", () => setSelectedIceberg(ib));
+      popup.on("close", () => setSelectedIceberg((prev) => (prev?.id === ib.id ? null : prev)));
 
       markersRef.current.push(marker);
     });
   }, [icebergs, showIcebergs]);
 
+  // Manage Start ("S") and Destination ("D") Markers
+  const endpointMarkersRef = useRef<maplibregl.Marker[]>([]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
 
+    endpointMarkersRef.current.forEach((m) => m.remove());
+    endpointMarkersRef.current = [];
+
+    // Start Marker (S)
+    const startEl = document.createElement("div");
+    startEl.className = "start-endpoint-marker";
+    startEl.innerHTML = `
+      <div style="background: #10b981; color: #022c22; font-weight: 900; font-family: monospace; font-size: 13px; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 0 10px rgba(16,185,129,0.8); cursor: pointer;" title="Route Start (S)">
+        S
+      </div>
+    `;
+    const startMarker = new maplibregl.Marker({ element: startEl })
+      .setLngLat([startCoords[1], startCoords[0]])
+      .addTo(map);
+
+    // Destination Marker (D)
+    const destEl = document.createElement("div");
+    destEl.className = "dest-endpoint-marker";
+    destEl.innerHTML = `
+      <div style="background: #ef4444; color: #ffffff; font-weight: 900; font-family: monospace; font-size: 13px; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 0 10px rgba(239,68,68,0.8); cursor: pointer;" title="Route Destination (D)">
+        D
+      </div>
+    `;
+    const destMarker = new maplibregl.Marker({ element: destEl })
+      .setLngLat([destCoords[1], destCoords[0]])
+      .addTo(map);
+
+    endpointMarkersRef.current = [startMarker, destMarker];
+  }, [startCoords, destCoords, mapLoaded]);
 
   // Handle Route Calculation Submit
   const handleRouteSearch = async (e: React.FormEvent) => {
@@ -728,8 +781,7 @@ export default function HomePage() {
     const render = () => {
       if (!isMounted || !map || !mapLoaded) return;
 
-      // Clear previous routes layers & sources
-      const routeIds: RouteOption["id"][] = ["safest", "balanced", "fastest"];
+      const routeIds = ["safest", "balanced", "eco", "fastest"];
       routeIds.forEach((rid) => {
         try {
           if (map.getLayer(`route-${rid}-layer`)) {
@@ -747,9 +799,7 @@ export default function HomePage() {
         try {
           const rid = r.id;
           const isSelected = selectedRouteId === rid;
-
-          // Color maps: Safest green, Balanced yellow, Fastest red
-          const color = rid === "safest" ? "#22c55e" : rid === "balanced" ? "#eab308" : "#ef4444";
+          const color = PROFILE_CONFIG[rid]?.hex ?? "#eab308";
           const width = isSelected ? 6.5 : 3.0;
           const opacity = isSelected ? 1.0 : 0.35;
 
@@ -782,7 +832,6 @@ export default function HomePage() {
         }
       });
 
-      // Auto-fit bounds of all route profiles so the entire route is visible
       let minLng = Infinity;
       let maxLng = -Infinity;
       let minLat = Infinity;
@@ -813,7 +862,7 @@ export default function HomePage() {
               [maxLng, maxLat],
             ],
             {
-              padding: { top: 90, bottom: 90, left: 100, right: 100 },
+              padding: { top: 90, bottom: 90, left: 440, right: 100 },
               maxZoom: 7,
               duration: 1000,
             }
@@ -831,7 +880,6 @@ export default function HomePage() {
     };
   }, [routes, selectedRouteId, showRoutes, mapLoaded]);
 
-  // Finish Polygon Drawing
   const handleFinishDrawing = () => {
     if (drawingPoints.length < 3) {
       alert("Exclusion zone polygon requires at least 3 vertices!");
@@ -843,7 +891,6 @@ export default function HomePage() {
     updateDrawingLayer([]);
   };
 
-  // Clear Zones
   const handleClearZones = () => {
     setExclusionZones([]);
     setDrawingPoints([]);
@@ -851,17 +898,15 @@ export default function HomePage() {
     updateDrawingLayer([]);
   };
 
-  // Export PDF Mission Plan
   const handleExportPdf = async () => {
     try {
       const pdfDoc = await PDFDocument.create();
-      let page = pdfDoc.addPage([595.276, 841.89]); // A4 dimensions in points
+      let page = pdfDoc.addPage([595.276, 841.89]);
       const { width, height } = page.getSize();
 
       const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
       const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-      // Header block
       page.drawRectangle({
         x: 0,
         y: height - 100,
@@ -888,7 +933,6 @@ export default function HomePage() {
 
       let yPos = height - 140;
 
-      // 1. Capture Map Libre Canvas Image
       try {
         const mapCanvas = mapRef.current?.getCanvas();
         if (mapCanvas) {
@@ -915,19 +959,10 @@ export default function HomePage() {
           yPos -= drawHeight + 35;
         }
       } catch (err) {
-        console.error("Canvas capture failed, generating summary-only PDF:", err);
-        page.drawText("[Map Visualization unavailable in this export]", {
-          x: 40,
-          y: yPos,
-          size: 10,
-          font,
-          color: rgb(0.5, 0.5, 0.5),
-        });
         yPos -= 35;
       }
 
-      // 2. Selected Route Stats Section
-      page.drawText("I. Locked Route Analysis", {
+      page.drawText("I. Route Profile Comparison", {
         x: 40,
         y: yPos,
         size: 13,
@@ -935,30 +970,13 @@ export default function HomePage() {
         color: rgb(30 / 255, 58 / 255, 138 / 255),
       });
 
-      page.drawLine({
-        start: { x: 40, y: yPos - 5 },
-        end: { x: width - 40, y: yPos - 5 },
-        thickness: 1,
-        color: rgb(226 / 255, 232 / 255, 240 / 255),
-      });
-
       yPos -= 25;
 
-      const activeRoute = routes.find((r) => r.id === selectedRouteId);
-      if (activeRoute) {
-        // Table layout
-        const headers = ["Metric", "safest", "balanced (locked)", "fastest"];
-        const metrics = [
-          ["Distance", "142.6 NM", `${activeRoute.id === "balanced" ? activeRoute.distanceNm : "118.3"} NM`, "96.4 NM"],
-          ["ETA", "18.4 Hrs", `${activeRoute.id === "balanced" ? activeRoute.etaHours : "14.1"} Hrs`, "11.2 Hrs"],
-          ["Fuel Cons.", "21.2 MT", `${activeRoute.id === "balanced" ? activeRoute.fuelMt : "16.8"} MT`, "13.4 MT"],
-          ["Risk Index", "0.12", `${activeRoute.id === "balanced" ? activeRoute.riskScore : "0.31"}`, "0.58"],
-        ];
-
-        // Draw headers
+      if (routes && routes.length > 0) {
+        const headers = ["Profile", "Distance", "ETA", "Fuel MT", "Risk"];
         headers.forEach((h, idx) => {
           page.drawText(h, {
-            x: 40 + idx * 130,
+            x: 40 + idx * 100,
             y: yPos,
             size: 9,
             font: fontBold,
@@ -968,95 +986,28 @@ export default function HomePage() {
 
         yPos -= 18;
 
-        metrics.forEach((rowValues) => {
-          rowValues.forEach((val, idx) => {
-            const isMetricHeader = idx === 0;
-            const isLockedRoute = idx === 2;
+        routes.forEach((r) => {
+          const isSelected = r.id === selectedRouteId;
+          const values = [
+            r.name + (isSelected ? " *" : ""),
+            `${r.distanceNm.toFixed(1)} NM`,
+            `${r.etaHours.toFixed(1)} h`,
+            `${r.fuelMt.toFixed(1)} MT`,
+            `${(r.riskScore * 100).toFixed(0)}%`,
+          ];
+          values.forEach((val, idx) => {
             page.drawText(val, {
-              x: 40 + idx * 130,
+              x: 40 + idx * 100,
               y: yPos,
               size: 8.5,
-              font: isMetricHeader || isLockedRoute ? fontBold : font,
-              color: isLockedRoute ? rgb(234 / 255, 179 / 255, 8 / 255) : rgb(15 / 255, 23 / 255, 42 / 255),
+              font: isSelected ? fontBold : font,
+              color: isSelected ? rgb(234 / 255, 179 / 255, 8 / 255) : rgb(15 / 255, 23 / 255, 42 / 255),
             });
           });
           yPos -= 14;
         });
-
-        yPos -= 10;
-      } else {
-        page.drawText("No active route locked. Setup coordinates to compute navigation profiles.", {
-          x: 45,
-          y: yPos,
-          size: 9.5,
-          font,
-          color: rgb(100 / 255, 116 / 255, 139 / 255),
-        });
-        yPos -= 20;
       }
 
-      // Page break check for Icebergs section
-      if (yPos < 200) {
-        page = pdfDoc.addPage([595.276, 841.89]);
-        yPos = height - 60;
-      } else {
-        yPos -= 15;
-      }
-
-      // 3. High Risk Icebergs
-      page.drawText("II. High-Risk Iceberg Hazards", {
-        x: 40,
-        y: yPos,
-        size: 13,
-        font: fontBold,
-        color: rgb(185 / 255, 28 / 255, 28 / 255), // Red
-      });
-
-      page.drawLine({
-        start: { x: 40, y: yPos - 5 },
-        end: { x: width - 40, y: yPos - 5 },
-        thickness: 1,
-        color: rgb(226 / 255, 232 / 255, 240 / 255),
-      });
-
-      yPos -= 25;
-
-      const highRisk = icebergs.filter((ib) => ib.highRisk);
-      if (highRisk.length > 0) {
-        // Table Headers
-        page.drawText("Iceberg ID", { x: 40, y: yPos, size: 9, font: fontBold });
-        page.drawText("Name", { x: 120, y: yPos, size: 9, font: fontBold });
-        page.drawText("Position (Lat, Lon)", { x: 200, y: yPos, size: 9, font: fontBold });
-        page.drawText("Danger Radius", { x: 380, y: yPos, size: 9, font: fontBold });
-        page.drawText("Status", { x: 480, y: yPos, size: 9, font: fontBold });
-
-        yPos -= 16;
-
-        highRisk.forEach((ib) => {
-          if (yPos < 50) {
-            page = pdfDoc.addPage([595.276, 841.89]);
-            yPos = height - 60;
-          }
-
-          page.drawText(ib.id, { x: 40, y: yPos, size: 8, font });
-          page.drawText(ib.name, { x: 120, y: yPos, size: 8, font });
-          page.drawText(`${ib.lat.toFixed(4)}, ${ib.lon.toFixed(4)}`, { x: 200, y: yPos, size: 8, font });
-          page.drawText(`${ib.dangerRadiusNm} NM`, { x: 380, y: yPos, size: 8, font });
-          page.drawText(ib.status.toUpperCase(), { x: 480, y: yPos, size: 8, font, color: rgb(0.8, 0.2, 0.2) });
-
-          yPos -= 14;
-        });
-      } else {
-        page.drawText("No high-risk iceberg hazards currently detected in the operational sector.", {
-          x: 45,
-          y: yPos,
-          size: 9.5,
-          font,
-          color: rgb(100 / 255, 116 / 255, 139 / 255),
-        });
-      }
-
-      // Save and download PDF
       const pdfBytes = await pdfDoc.save();
       const blob = new Blob([pdfBytes as any], { type: "application/pdf" });
       const link = document.createElement("a");
@@ -1065,345 +1016,77 @@ export default function HomePage() {
       link.click();
     } catch (err) {
       console.error("PDF Export failed:", err);
-      alert("An error occurred during PDF generation.");
     }
   };
 
   return (
-    <main className="h-screen w-screen relative bg-slate-950 text-slate-100 flex flex-col font-sans overflow-hidden">
+    <main className="h-screen w-screen relative bg-slate-950 text-slate-100 flex font-sans overflow-hidden">
       {/* Map Element + Canvas Particle Overlay */}
       <div className="absolute inset-0 z-0 bg-slate-900">
-        <div
-          ref={mapContainerRef}
-          className="w-full h-full"
-        />
-        {/* Freshwater / Ice-flow particle canvas – rendered on top of the map tile */}
-        <OverviewMapCanvas />
+        <div ref={mapContainerRef} className="w-full h-full" />
+        <OverviewMapCanvas map={mapRef.current} />
       </div>
 
       {/* Ship Relocated Warp Confirmation Toast */}
       {warpToast && (
         <div
           id="warp-confirmation-toast"
-          className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-cyan-500/50 backdrop-blur-md px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-mono text-cyan-200 animate-in fade-in slide-in-from-top-4 duration-300"
+          className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-cyan-500/50 backdrop-blur-md px-4 py-2 rounded-xl shadow-2xl flex items-center gap-3 text-xs font-mono text-cyan-200"
         >
           <Navigation className="h-4 w-4 text-cyan-400 animate-pulse shrink-0" />
-          <span className="font-semibold text-white">
-            Ship relocated — view in 3D simulator
-          </span>
-          <span className="text-[11px] text-cyan-300/80 font-mono">
+          <span className="font-semibold text-white">Ship relocated to</span>
+          <span className="text-[11px] text-cyan-300 font-mono">
             [{warpToast.lat.toFixed(2)}°, {warpToast.lon.toFixed(2)}°]
           </span>
           <Link
             href="/simulation"
-            className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 hover:text-white text-[11px] font-bold font-sans transition-all flex items-center gap-1 shrink-0"
+            className="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 hover:text-white text-[11px] font-bold font-sans transition-all shrink-0"
           >
-            Open 3D Simulator &rarr;
+            Open 3D &rarr;
           </Link>
           <button
             onClick={() => setWarpToast(null)}
             className="text-white/40 hover:text-white ml-1 text-base leading-none"
-            aria-label="Close"
           >
             &times;
           </button>
         </div>
       )}
 
-      {/* Styled Canvas Layer Inversion Reversal Styles */}
-      <style jsx global>{`
-        .maplibregl-canvas {
-          outline: none;
-        }
-        /* Make sure popups do not inherit map container inversion filter */
-        .hud-popup-container .maplibregl-popup-content {
-          background: rgba(15, 23, 42, 0.95) !important;
-          border: 1px solid rgba(255, 255, 255, 0.15) !important;
-          border-radius: 8px !important;
-          padding: 0 !important;
-          box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
-        }
-        .hud-popup-container .maplibregl-popup-close-button {
-          color: rgba(255, 255, 255, 0.5) !important;
-          padding: 4px 8px !important;
-          font-size: 14px !important;
-          outline: none !important;
-        }
-        .hud-popup-container .maplibregl-popup-close-button:hover {
-          color: white !important;
-          background: transparent !important;
-        }
-        .hud-popup-container .maplibregl-popup-anchor-top .maplibregl-popup-tip {
-          border-bottom-color: rgba(15, 23, 42, 0.95) !important;
-        }
-        .hud-popup-container .maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
-          border-top-color: rgba(15, 23, 42, 0.95) !important;
-        }
-        .hud-popup-container .maplibregl-popup-anchor-left .maplibregl-popup-tip {
-          border-right-color: rgba(15, 23, 42, 0.95) !important;
-        }
-        .hud-popup-container .maplibregl-popup-anchor-right .maplibregl-popup-tip {
-          border-left-color: rgba(15, 23, 42, 0.95) !important;
-        }
-      `}</style>
-
-      {/* Overlapping Glassmorphism HUD Panels */}
-      <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between z-10">
-        {/* Top bar & Header info */}
-        <div className="flex justify-between items-start">
-          <div className="pointer-events-auto bg-black/40 backdrop-blur-md border border-white/10 rounded-xl p-4 max-w-md shadow-2xl flex flex-col gap-1">
+      {/* Left Sidebar: Scrollable panel containing Router, Table, Layers, Exclusion Tools */}
+      <div className="relative z-10 w-96 max-w-[400px] h-full p-3 pointer-events-none flex flex-col">
+        <div className="pointer-events-auto bg-black/60 backdrop-blur-md border border-white/10 rounded-2xl p-4 shadow-2xl flex flex-col gap-3.5 max-h-full overflow-y-auto">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-white/10 pb-2.5">
             <div className="flex items-center gap-2">
-              <Compass className="h-5 w-5 text-blue-500 animate-spin-slow" />
-              <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-widest">
-                POLARIS MISSION MANAGEMENT
-              </p>
-            </div>
-            <h1 className="text-xl font-bold text-white tracking-tight mt-1">
-              Analytics & Routing Dashboard
-            </h1>
-            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-              Examine live satellite sea ice grids, inspect historical drift trajectory uncertainty cones, draw mission exclusion zones, and compare cost/risk route matrices.
-            </p>
-            <div className="border-t border-white/10 my-2 pt-2 flex flex-col gap-2">
-              <p className="text-[10px] text-slate-400 italic">
-                Configure start/destination coordinates, lock a route option, and run the real-time simulation:
-              </p>
-              <Link
-                href="/simulation"
-                className="inline-flex rounded-lg bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 text-xs font-bold uppercase transition-all justify-center items-center gap-1.5 shadow-lg w-full"
-              >
-                Launch 3D Simulator
-                <ChevronRight className="h-4 w-4" />
-              </Link>
-            </div>
-          </div>
-
-          <div className="flex flex-col items-end gap-2.5 shrink-0">
-            <AlertBanner />
-            {/* Quick Layer Controls Panel */}
-            <div className="pointer-events-auto bg-black/40 backdrop-blur-md border border-white/10 rounded-xl p-3.5 w-60 shadow-2xl flex flex-col gap-2">
-            <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-2 mb-1">
-              <Layers className="h-4 w-4 text-blue-400" />
-              Active Overlay Layers
-            </h3>
-            <div className="flex flex-col gap-2 text-xs">
-              <button
-                onClick={() => setShowHeatmap(!showHeatmap)}
-                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
-                  showHeatmap ? "bg-blue-500/10 border-blue-500/30 text-blue-300" : "bg-white/5 border-white/5 text-slate-400"
-                }`}
-              >
-                <span>Sea Ice Concentration (Heatmap)</span>
-                {showHeatmap ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-              </button>
-
-              <button
-                onClick={() => setShowIcebergs(!showIcebergs)}
-                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
-                  showIcebergs ? "bg-blue-500/10 border-blue-500/30 text-blue-300" : "bg-white/5 border-white/5 text-slate-400"
-                }`}
-              >
-                <span>Iceberg Hazard Vectors</span>
-                {showIcebergs ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-              </button>
-
-              <button
-                onClick={() => setShowRoutes(!showRoutes)}
-                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
-                  showRoutes ? "bg-blue-500/10 border-blue-500/30 text-blue-300" : "bg-white/5 border-white/5 text-slate-400"
-                }`}
-              >
-                <span>Pathfinding Options</span>
-                {showRoutes ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-              </button>
-
-              <button
-                onClick={() => setShowExclusionZones(!showExclusionZones)}
-                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
-                  showExclusionZones ? "bg-blue-500/10 border-blue-500/30 text-blue-300" : "bg-white/5 border-white/5 text-slate-400"
-                }`}
-              >
-                <span>Mission Exclusion Zones</span>
-                {showExclusionZones ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-              </button>
-
-              {/* Wildlife / Eco layers */}
-              <div className="border-t border-white/10 pt-2 mt-1 flex flex-col gap-2">
-                <p className="text-[9px] uppercase tracking-wider text-slate-500 font-bold">Eco-Impact Layers</p>
-                <button
-                  onClick={() => usePolarisStore.getState().toggleLayer("wildlife")}
-                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
-                    usePolarisStore.getState().layers.wildlife ? "bg-teal-500/10 border-teal-500/30 text-teal-300" : "bg-white/5 border-white/5 text-slate-400"
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5"><Bird className="h-3.5 w-3.5" />Wildlife Impact</span>
-                  {usePolarisStore.getState().layers.wildlife ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                </button>
-                <button
-                  onClick={() => usePolarisStore.getState().toggleLayer("freshwaterPlume")}
-                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all ${
-                    usePolarisStore.getState().layers.freshwaterPlume ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/5 text-slate-400"
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5"><Waves className="h-3.5 w-3.5" />Freshwater / Meltwater</span>
-                  {usePolarisStore.getState().layers.freshwaterPlume ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                </button>
+              <Compass className="h-5 w-5 text-cyan-400 animate-spin-slow" />
+              <div>
+                <p className="text-[9px] font-bold text-cyan-400 uppercase tracking-widest leading-none">
+                  POLARIS NAVIGATION
+                </p>
+                <h1 className="text-sm font-bold text-white tracking-tight leading-tight mt-0.5">
+                  Route Planner &amp; 2D Map
+                </h1>
               </div>
             </div>
-          </div>
-          <div className="pointer-events-auto">
-            <DataRealityBadge />
-          </div>
-          {/* Wildlife Info Card – shown when a colony is selected */}
-          <div className="pointer-events-auto">
-            <WildlifeInfoCard />
-          </div>
-          {/* Plume legend – shown when freshwaterPlume layer is on */}
-          <div className="pointer-events-auto">
-            <PlumeLegend />
-          </div>
-        </div>
-      </div>
-
-        {/* Bottom controls panel */}
-        <div className="flex justify-between items-end gap-4 mt-auto">
-          {/* Legend and drawing controls */}
-          <div className="pointer-events-auto flex flex-col gap-3">
-            <AlertHistoryLog />
-            {/* Exclusion drawing controls */}
-            <div className="bg-black/40 backdrop-blur-md border border-white/10 rounded-xl p-3 shadow-2xl w-72 flex flex-col gap-2">
-              <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-2">
-                <PenTool className="h-4 w-4 text-red-400" />
-                Exclusion Zone Polygon Tool
-              </h3>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <button
-                  onClick={() => {
-                    setIsDrawing(!isDrawing);
-                    setDrawingPoints([]);
-                    updateDrawingLayer([]);
-                  }}
-                  className={`px-3 py-2 rounded-lg border font-semibold transition-all ${
-                    isDrawing ? "bg-red-500/20 border-red-500 text-red-300 animate-pulse" : "bg-white/5 border-white/10 text-slate-200 hover:bg-white/10"
-                  }`}
-                >
-                  {isDrawing ? "Cancel Draw" : "Draw Zone"}
-                </button>
-                <button
-                  onClick={handleFinishDrawing}
-                  disabled={!isDrawing || drawingPoints.length < 3}
-                  className="px-3 py-2 rounded-lg bg-green-600 border border-green-500 hover:bg-green-500 text-white font-semibold disabled:opacity-30 disabled:hover:bg-green-600 disabled:cursor-not-allowed transition-all"
-                >
-                  Finish Polygon
-                </button>
-              </div>
-              {isDrawing && (
-                <div className="text-[10px] text-red-300 font-medium bg-red-950/20 p-2 rounded border border-red-900/30">
-                  Click on the map to define the polygon vertices (Minimum 3 points). Current nodes: {drawingPoints.length}
-                </div>
-              )}
-              {exclusionZones.length > 0 && (
-                <button
-                  onClick={handleClearZones}
-                  className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg border border-red-500/20 text-red-400 bg-red-950/15 hover:bg-red-500/10 text-xs transition-all"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Clear All Zones ({exclusionZones.length})
-                </button>
-              )}
-              {/* [Simulated demo data] Wildlife-sensitive zone preset */}
-              <button
-                onClick={() => {
-                  // Add preset polygon around Snow Hill Emperor Penguin colony
-                  const preset: [number, number][] = [
-                    [-58.5, -64.1], [-55.8, -64.1], [-55.8, -63.0], [-58.5, -63.0], [-58.5, -64.1],
-                  ];
-                  setExclusionZones((prev) => [...prev, preset]);
-                  const map = mapRef.current;
-                  if (map) {
-                    const all = [...exclusionZones, preset];
-                    const src = map.getSource("exclusion-zones") as any;
-                    if (src) src.setData({
-                      type: "FeatureCollection",
-                      features: all.map((z) => ({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [z] } })),
-                    });
-                  }
-                  usePolarisStore.getState().pushAlert("WARNING", "Wildlife-sensitive exclusion zone added — Snow Hill Emperor Penguin Colony (64.48°S, 57.22°W, High Risk)");
-                }}
-                className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg border border-teal-500/30 text-teal-300 bg-teal-950/15 hover:bg-teal-500/10 text-xs transition-all"
-              >
-                <Bird className="h-3.5 w-3.5" />
-                Add Wildlife-Sensitive Zone Preset
-              </button>
-            </div>
-
-            {/* Ice level Legend */}
-            <div className="bg-black/40 backdrop-blur-md border border-white/10 rounded-xl p-3 shadow-2xl w-72">
-              <h4 className="text-[10px] font-semibold uppercase text-slate-400 tracking-wider mb-2">
-                Sea Ice Concentration (SIC) Density
-              </h4>
-              <div className="grid grid-cols-4 gap-1 text-[9px] text-center">
-                <div className="flex flex-col gap-1">
-                  <div className="h-2 rounded bg-[#1e3a8a]" />
-                  <span className="font-bold text-slate-200">Low</span>
-                  <span className="text-slate-400">0.0–0.3</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="h-2 rounded bg-[#3b82f6]" />
-                  <span className="font-bold text-slate-200">Moderate</span>
-                  <span className="text-slate-400">0.3–0.6</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="h-2 rounded bg-[#93c5fd]" />
-                  <span className="font-bold text-slate-200">High</span>
-                  <span className="text-slate-400">0.6–0.8</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <div className="h-2 rounded bg-white" />
-                  <span className="font-bold text-slate-200">Very High</span>
-                  <span className="text-slate-400">0.8–1.0</span>
-                </div>
-              </div>
-              {/* Ice Flow / Ocean Current legend row */}
-              <div className="mt-2.5 pt-2 border-t border-white/10">
-                <h4 className="text-[10px] font-semibold uppercase text-slate-400 tracking-wider mb-1.5">
-                  Ice Flow &amp; Ocean Current
-                </h4>
-                <div className="flex items-center justify-between text-[9px]">
-                  <div className="flex items-center gap-1.5">
-                    <span className="inline-block w-3.5 h-1.5 rounded-full" style={{ background: "linear-gradient(to right, rgba(50,180,255,0.4), rgba(160,240,255,0.95))" }} />
-                    <span className="text-slate-400">Streamline particles (freshwater advection)</span>
-                  </div>
-                </div>
-                <div className="flex justify-between text-[9px] text-slate-500 mt-1 tabular-nums">
-                  <span>Low conc. &lt;0.2</span>
-                  <span className="text-cyan-300">High conc. &gt;0.6</span>
-                </div>
-              </div>
-            </div>
+            <Link
+              href="/simulation"
+              className="px-2.5 py-1 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-[10px] font-bold uppercase transition-all flex items-center gap-1 shadow-md shadow-cyan-600/30 shrink-0"
+            >
+              Launch 3D
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
           </div>
 
-          {/* Navigation route picker and stats table */}
-          <div className="pointer-events-auto bg-black/40 backdrop-blur-md border border-white/10 rounded-xl p-4 w-[520px] shadow-2xl flex flex-col gap-3">
-            <h3 className="text-xs font-semibold text-slate-200 flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <Route className="h-4 w-4 text-emerald-400 animate-pulse" />
-                Transit Router & Cost/Risk Evaluation
-              </span>
-              <button
-                onClick={handleExportPdf}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-all border border-blue-400"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                Export Mission Plan
-              </button>
-            </h3>
-
-            {/* Inputs coordinate picker */}
-            <form onSubmit={handleRouteSearch} className="grid grid-cols-5 gap-3.5 items-end text-xs">
-              <div className="col-span-2 flex flex-col gap-1">
-                <label className="text-[10px] text-slate-400 uppercase font-semibold">Start Coordinates</label>
-                <div className="flex gap-1.5 items-center">
+          {/* Router Inputs */}
+          <form onSubmit={handleRouteSearch} className="flex flex-col gap-2 bg-white/5 p-2.5 rounded-xl border border-white/5">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <label className="text-[9px] text-white/50 uppercase font-bold flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+                  Start (Lat, Lon)
+                </label>
+                <div className="flex gap-1 items-center">
                   <input
                     type="text"
                     value={startCoords.join(", ")}
@@ -1411,24 +1094,27 @@ export default function HomePage() {
                       const parts = e.target.value.split(",").map((p) => parseFloat(p.trim()) || 0);
                       if (parts.length === 2) setStartCoords([parts[0], parts[1]]);
                     }}
-                    className="w-full bg-slate-900 border border-white/10 rounded p-1.5 text-center text-slate-200 tabular-nums focus:border-blue-500 focus:outline-none"
+                    className="w-full bg-slate-900 border border-white/15 rounded px-2 py-1 text-xs text-slate-100 tabular-nums font-mono focus:border-cyan-400 focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => setPickMode(pickMode === "start" ? "none" : "start")}
-                    className={`px-2 py-1.5 rounded border transition-all ${
+                    className={`px-1.5 py-1 rounded border transition-all ${
                       pickMode === "start" ? "bg-amber-500 text-black border-amber-500" : "bg-white/5 border-white/10 hover:bg-white/10"
                     }`}
                     title="Click map to pick starting position"
                   >
-                    <MapPin className="h-3.5 w-3.5" />
+                    <MapPin className="h-3 w-3" />
                   </button>
                 </div>
               </div>
 
-              <div className="col-span-2 flex flex-col gap-1">
-                <label className="text-[10px] text-slate-400 uppercase font-semibold">Destination Coords</label>
-                <div className="flex gap-1.5 items-center">
+              <div className="flex flex-col gap-1">
+                <label className="text-[9px] text-white/50 uppercase font-bold flex items-center gap-1">
+                  <span className="w-2 h-2 rounded-full bg-rose-400 inline-block" />
+                  Dest (Lat, Lon)
+                </label>
+                <div className="flex gap-1 items-center">
                   <input
                     type="text"
                     value={destCoords.join(", ")}
@@ -1436,100 +1122,103 @@ export default function HomePage() {
                       const parts = e.target.value.split(",").map((p) => parseFloat(p.trim()) || 0);
                       if (parts.length === 2) setDestCoords([parts[0], parts[1]]);
                     }}
-                    className="w-full bg-slate-900 border border-white/10 rounded p-1.5 text-center text-slate-200 tabular-nums focus:border-blue-500 focus:outline-none"
+                    className="w-full bg-slate-900 border border-white/15 rounded px-2 py-1 text-xs text-slate-100 tabular-nums font-mono focus:border-cyan-400 focus:outline-none"
                   />
                   <button
                     type="button"
                     onClick={() => setPickMode(pickMode === "dest" ? "none" : "dest")}
-                    className={`px-2 py-1.5 rounded border transition-all ${
+                    className={`px-1.5 py-1 rounded border transition-all ${
                       pickMode === "dest" ? "bg-amber-500 text-black border-amber-500" : "bg-white/5 border-white/10 hover:bg-white/10"
                     }`}
                     title="Click map to pick destination position"
                   >
-                    <MapPin className="h-3.5 w-3.5" />
+                    <MapPin className="h-3 w-3" />
                   </button>
                 </div>
               </div>
-
-              <button
-                type="submit"
-                className="w-full bg-blue-600 border border-blue-500 hover:bg-blue-500 text-white font-bold p-1.5 rounded h-[31px] transition-all"
-              >
-                Compute
-              </button>
-            </form>
+            </div>
 
             {pickMode !== "none" && (
-              <div className="text-[10px] text-amber-300 font-medium animate-pulse text-center bg-amber-950/20 border border-amber-900/30 p-1.5 rounded">
-                Interactive Picking Mode active. Click on the map to record target coordinates for: {pickMode.toUpperCase()}
+              <div className="text-[10px] text-amber-300 font-medium animate-pulse text-center bg-amber-950/40 border border-amber-500/30 py-1 rounded">
+                Click map to select {pickMode.toUpperCase()} coordinate
               </div>
             )}
 
-            {/* Route Stats Table */}
-            <div className="border border-white/10 rounded-xl overflow-hidden bg-slate-950/60 max-h-44 overflow-y-auto">
+            <button
+              id="compute-route-btn"
+              type="submit"
+              className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-1.5 rounded-lg text-xs uppercase tracking-wider transition-all shadow-md shadow-cyan-600/30 mt-1"
+            >
+              Compute Routes
+            </button>
+          </form>
+
+          {/* 4-Row Route Comparison Table */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/60 flex items-center gap-1.5">
+                <Route className="h-3.5 w-3.5 text-cyan-400" />
+                Pathfinding Profiles (4)
+              </span>
+              <button
+                onClick={handleExportPdf}
+                className="text-[9px] font-bold text-cyan-300 hover:text-white flex items-center gap-1 uppercase"
+              >
+                <FileText className="h-3 w-3" />
+                Export PDF
+              </button>
+            </div>
+
+            <div className="border border-white/10 rounded-xl overflow-hidden bg-slate-950/70">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-slate-900 text-slate-300 border-b border-white/10 text-[10px] uppercase font-bold tracking-wider">
-                    <th className="p-2 pl-3">Route Profile</th>
-                    <th className="p-2 text-right">Dist (NM)</th>
-                    <th className="p-2 text-right">ETA (hr)</th>
-                    <th className="p-2 text-right">Fuel (MT)</th>
-                    <th className="p-2 text-right">Risk</th>
-                    <th className="p-2 text-right"><Bird className="inline h-3 w-3 mr-0.5 text-teal-400" />Wildlife</th>
-                    <th className="p-2 text-center">Lock</th>
+                  <tr className="bg-white/5 text-white/50 border-b border-white/10 text-[9px] uppercase font-bold tracking-wider">
+                    <th className="p-1.5 pl-2.5">Profile</th>
+                    <th className="p-1.5 text-right">DIST</th>
+                    <th className="p-1.5 text-right">ETA</th>
+                    <th className="p-1.5 text-right">FUEL</th>
+                    <th className="p-1.5 text-right">RISK</th>
+                    <th className="p-1.5 text-center">Lock</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5 text-[11px] tabular-nums">
+                <tbody className="divide-y divide-white/5 text-[10px] font-mono tabular-nums">
                   {routes.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="p-4 text-center text-slate-400 italic">
-                        Input operational endpoints and click &quot;Compute&quot; to compare navigation routes.
+                      <td colSpan={6} className="p-3 text-center text-white/40 italic font-sans text-xs">
+                        Click Compute to calculate routes
                       </td>
                     </tr>
                   ) : (
                     routes.map((r) => {
                       const isSelected = selectedRouteId === r.id;
-                      const textTheme = r.id === "safest" ? "text-green-400" : r.id === "balanced" ? "text-yellow-400" : "text-red-400";
-                      // [Simulated demo data] Wildlife risk per route profile
-                      const wildlifeRisk = r.id === "safest" ? { label: "Low", cls: "text-emerald-400" } : r.id === "balanced" ? { label: "Mod", cls: "text-yellow-400" } : { label: "High", cls: "text-red-400" };
+                      const cfg = PROFILE_CONFIG[r.id] ?? { color: "text-white", label: r.name };
                       return (
                         <tr
                           key={r.id}
-                          className={`hover:bg-white/5 transition-all ${
-                            isSelected ? "bg-blue-500/10 text-white font-medium" : "text-slate-300"
+                          onClick={() => lockRoute(r.id)}
+                          className={`cursor-pointer transition-colors ${
+                            isSelected ? "bg-white/10 text-white font-bold" : "text-white/70 hover:bg-white/5"
                           }`}
                         >
-                          <td className={`p-2 pl-3 font-semibold ${textTheme} uppercase`}>
-                            {r.name}
+                          <td className={`p-1.5 pl-2.5 font-bold ${cfg.color} capitalize`}>
+                            {cfg.label}
                           </td>
-                          <td className="p-2 text-right font-medium">{r.distanceNm}</td>
-                          <td className="p-2 text-right font-medium">{r.etaHours}</td>
-                          <td className="p-2 text-right font-medium">{r.fuelMt}</td>
-                          <td className="p-2 text-right font-semibold">{r.riskScore.toFixed(2)}</td>
-                          <td className={`p-2 text-right font-bold text-[10px] ${wildlifeRisk.cls}`}>{wildlifeRisk.label}</td>
-                          <td className="p-2 text-center">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                lockRoute(r.id);
-                                const store = usePolarisStore.getState();
-                                if (r.id === "fastest") {
-                                  store.pushAlert("WARNING", `Route [${r.name}] passes 40 km from Weddell seal haul-out — HIGH wildlife risk`);
-                                  store.pushAlert("WARNING", `Route [${r.name}] crosses A81 freshwater plume zone (salinity -1.15 PSU)`);
-                                } else if (r.id === "balanced") {
-                                  store.pushAlert("INFO", `Route [${r.name}] passes 72 km from Adelie penguin corridor — MODERATE eco-impact`);
-                                } else {
-                                  store.pushAlert("INFO", `Route [${r.name}] avoids all critical wildlife habitats — LOW eco-impact`);
-                                }
-                              }}
-                              className={`p-1 px-2.5 rounded text-[10px] font-bold uppercase transition-all ${
+                          <td className="p-1.5 text-right">{r.distanceNm.toFixed(1)}</td>
+                          <td className="p-1.5 text-right">{r.etaHours.toFixed(1)}h</td>
+                          <td className="p-1.5 text-right">{r.fuelMt.toFixed(1)}</td>
+                          <td className="p-1.5 text-right font-bold text-emerald-400">
+                            {(r.riskScore * 100).toFixed(0)}%
+                          </td>
+                          <td className="p-1.5 text-center">
+                            <span
+                              className={`inline-block px-1.5 py-0.5 rounded text-[8px] font-sans font-bold uppercase ${
                                 isSelected
-                                  ? "bg-emerald-500 text-slate-950 border border-emerald-400"
-                                  : "bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10"
+                                  ? "bg-emerald-500 text-slate-950 font-extrabold"
+                                  : "bg-white/5 text-white/40"
                               }`}
                             >
                               {isSelected ? "Locked" : "Select"}
-                            </button>
+                            </span>
                           </td>
                         </tr>
                       );
@@ -1539,6 +1228,134 @@ export default function HomePage() {
               </table>
             </div>
           </div>
+
+          {/* Overlay Layers Toggles */}
+          <div className="flex flex-col gap-1.5 border-t border-white/10 pt-2.5">
+            <h3 className="text-[10px] font-bold text-white/60 uppercase tracking-wider flex items-center gap-1.5">
+              <Layers className="h-3 w-3 text-cyan-400" />
+              Map Layers
+            </h3>
+            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+              <button
+                onClick={() => setShowHeatmap(!showHeatmap)}
+                className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${
+                  showHeatmap ? "bg-cyan-500/15 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/5 text-white/40"
+                }`}
+              >
+                <span>Sea Ice (SIC)</span>
+                {showHeatmap ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              </button>
+
+              <button
+                onClick={() => setShowIcebergs(!showIcebergs)}
+                className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${
+                  showIcebergs ? "bg-cyan-500/15 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/5 text-white/40"
+                }`}
+              >
+                <span>Icebergs (38)</span>
+                {showIcebergs ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              </button>
+
+              <button
+                onClick={() => setShowRoutes(!showRoutes)}
+                className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${
+                  showRoutes ? "bg-cyan-500/15 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/5 text-white/40"
+                }`}
+              >
+                <span>Routes</span>
+                {showRoutes ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              </button>
+
+              <button
+                onClick={() => setShowExclusionZones(!showExclusionZones)}
+                className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${
+                  showExclusionZones ? "bg-cyan-500/15 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/5 text-white/40"
+                }`}
+              >
+                <span>Exclusion Zones</span>
+                {showExclusionZones ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              </button>
+
+              <button
+                onClick={() => usePolarisStore.getState().toggleLayer("wildlife")}
+                className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${
+                  usePolarisStore.getState().layers.wildlife ? "bg-teal-500/15 border-teal-500/30 text-teal-300" : "bg-white/5 border-white/5 text-white/40"
+                }`}
+              >
+                <span className="flex items-center gap-1"><Bird className="h-3 w-3" />Wildlife</span>
+                {usePolarisStore.getState().layers.wildlife ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              </button>
+
+              <button
+                onClick={() => usePolarisStore.getState().toggleLayer("freshwaterPlume")}
+                className={`flex items-center justify-between px-2 py-1 rounded-lg border transition-all ${
+                  usePolarisStore.getState().layers.freshwaterPlume ? "bg-cyan-500/15 border-cyan-500/30 text-cyan-300" : "bg-white/5 border-white/5 text-white/40"
+                }`}
+              >
+                <span className="flex items-center gap-1"><Waves className="h-3 w-3" />Freshwater</span>
+                {usePolarisStore.getState().layers.freshwaterPlume ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Exclusion Polygon Tool */}
+          <div className="flex flex-col gap-1.5 border-t border-white/10 pt-2.5">
+            <h3 className="text-[10px] font-bold text-white/60 uppercase tracking-wider flex items-center gap-1.5">
+              <PenTool className="h-3 w-3 text-rose-400" />
+              Exclusion Zone Tool
+            </h3>
+            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+              <button
+                onClick={() => {
+                  setIsDrawing(!isDrawing);
+                  setDrawingPoints([]);
+                  updateDrawingLayer([]);
+                }}
+                className={`py-1 px-2 rounded-lg border font-semibold transition-all ${
+                  isDrawing ? "bg-rose-500/20 border-rose-500 text-rose-300 animate-pulse" : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                {isDrawing ? "Cancel" : "Draw Zone"}
+              </button>
+              <button
+                onClick={handleFinishDrawing}
+                disabled={!isDrawing || drawingPoints.length < 3}
+                className="py-1 px-2 rounded-lg bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-white font-semibold disabled:opacity-30 transition-all"
+              >
+                Finish ({drawingPoints.length})
+              </button>
+            </div>
+            {exclusionZones.length > 0 && (
+              <button
+                onClick={handleClearZones}
+                className="flex items-center justify-center gap-1 w-full py-1 rounded-lg border border-rose-500/20 text-rose-400 bg-rose-950/20 text-[10px] transition-all"
+              >
+                <Trash2 className="h-3 w-3" />
+                Clear Zones ({exclusionZones.length})
+              </button>
+            )}
+          </div>
+
+          {/* Alert History Log in left sidebar */}
+          <div className="border-t border-white/10 pt-2.5">
+            <AlertHistoryLog />
+          </div>
+        </div>
+      </div>
+
+      {/* Right Floating Elements */}
+      <div className="absolute top-3 right-3 z-10 pointer-events-none flex flex-col items-end gap-2.5">
+        <div className="pointer-events-auto">
+          <AlertBanner />
+        </div>
+        <div className="pointer-events-auto">
+          <DataRealityBadge />
+        </div>
+        <div className="pointer-events-auto">
+          <WildlifeInfoCard />
+        </div>
+        <div className="pointer-events-auto">
+          <PlumeLegend />
         </div>
       </div>
     </main>
