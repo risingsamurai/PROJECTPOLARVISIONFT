@@ -46,12 +46,12 @@ export function AntarcticLandmass() {
 
       try {
         const geom = new THREE.ExtrudeGeometry(shape, {
-          depth: 22.0, // Towering height of Antarctic glacier ice cliffs above waterline
+          depth: 2.8, // Natural coastal elevation above waterline
           bevelEnabled: true,
-          bevelSegments: 3,
-          steps: 2,
-          bevelSize: 1.2,
-          bevelThickness: 1.5,
+          bevelSegments: 2,
+          steps: 1,
+          bevelSize: 0.6,
+          bevelThickness: 0.6,
         });
         geoms.push(geom);
       } catch (err) {

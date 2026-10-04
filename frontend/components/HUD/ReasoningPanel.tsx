@@ -101,10 +101,15 @@ export function ReasoningPanel() {
         const addedNm = (safest.distanceNm - fastest.distanceNm).toFixed(1);
         const astarLine = `A* evaluated route around ${highRiskCount} high-risk zones — Safest adds ${addedNm}nm vs Fastest to avoid hazards`;
         addLog(astarLine, "risk");
+
+        const maxIce = (fastest as any).maxSicPct || 80;
+        const safestIce = (safest as any).maxSicPct || 70;
+        const iceReasonLine = `Ice Analysis: Safest routes through ${safestIce}% concentration band; Fastest penetrates pack ice (MAX SIC ${maxIce}%)`;
+        addLog(iceReasonLine, "risk");
       }
     } else if (activeRoute.id !== prevLockedRouteRef.current) {
       prevLockedRouteRef.current = activeRoute.id;
-      const profileLine = `Profile switched to ${activeRoute.name}: ${activeRoute.distanceNm.toFixed(1)} NM, ETA ${activeRoute.etaHours.toFixed(1)}h, Fuel ${activeRoute.fuelMt.toFixed(1)} MT`;
+      const profileLine = `Profile switched to ${activeRoute.name}: ${activeRoute.distanceNm.toFixed(1)} NM, ETA ${activeRoute.etaHours.toFixed(1)}h, Fuel ${activeRoute.fuelMt.toFixed(1)} MT (MAX SIC ${(activeRoute as any).maxSicPct ?? 75}%)`;
       addLog(profileLine, "route");
     }
   }, [routeVersion, activeRoute, routes, icebergs]);

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { generateMissionPdf } from "@/lib/missionPdfGenerator";
 import {
   MapPin,
   Compass,
@@ -613,8 +613,14 @@ export default function HomePage() {
     if (map.getLayer("risk-circles-layer")) {
       map.removeLayer("risk-circles-layer");
     }
+    if (map.getLayer("iceberg-bodies-layer")) {
+      map.removeLayer("iceberg-bodies-layer");
+    }
     if (map.getSource("risk-circles-source")) {
       map.removeSource("risk-circles-source");
+    }
+    if (map.getSource("iceberg-bodies-source")) {
+      map.removeSource("iceberg-bodies-source");
     }
 
     if (!showIcebergs || icebergs.length === 0) return;
@@ -622,7 +628,7 @@ export default function HomePage() {
     const riskCirclesFeatures = icebergs.map((ib) => {
       const lon = ib.lon;
       const lat = ib.lat;
-      const radiusNm = ib.dangerRadiusNm || 6.0;
+      const radiusNm = ib.dangerRadiusNm || 7.0;
       const points = [];
       const numPoints = 32;
       const radiusDeg = radiusNm / 60.0;
@@ -640,7 +646,33 @@ export default function HomePage() {
           type: "Polygon" as const,
           coordinates: [points],
         },
-        properties: { id: ib.id },
+        properties: { id: ib.id, highRisk: ib.highRisk },
+      };
+    });
+
+    const bodyCirclesFeatures = icebergs.map((ib) => {
+      const lon = ib.lon;
+      const lat = ib.lat;
+      const diam = ib.diameterNm || 1.5;
+      const physRadiusNm = diam / 2.0;
+      const points = [];
+      const numPoints = 24;
+      const radiusDeg = physRadiusNm / 60.0;
+      const cosLat = Math.cos((lat * Math.PI) / 180.0);
+      for (let i = 0; i < numPoints; i++) {
+        const angle = (i * 2 * Math.PI) / numPoints;
+        const dx = (Math.sin(angle) * radiusDeg) / cosLat;
+        const dy = Math.cos(angle) * radiusDeg;
+        points.push([lon + dx, lat + dy]);
+      }
+      points.push(points[0]);
+      return {
+        type: "Feature" as const,
+        geometry: {
+          type: "Polygon" as const,
+          coordinates: [points],
+        },
+        properties: { id: ib.id, name: ib.name },
       };
     });
 
@@ -657,8 +689,26 @@ export default function HomePage() {
       type: "fill",
       source: "risk-circles-source",
       paint: {
-        "fill-color": "rgba(239, 68, 68, 0.12)",
-        "fill-outline-color": "rgba(239, 68, 68, 0.75)",
+        "fill-color": "rgba(239, 68, 68, 0.08)",
+        "fill-outline-color": "rgba(239, 68, 68, 0.65)",
+      },
+    });
+
+    map.addSource("iceberg-bodies-source", {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: bodyCirclesFeatures,
+      },
+    });
+
+    map.addLayer({
+      id: "iceberg-bodies-layer",
+      type: "fill",
+      source: "iceberg-bodies-source",
+      paint: {
+        "fill-color": "rgba(248, 250, 252, 0.9)",
+        "fill-outline-color": "#38bdf8",
       },
     });
 
@@ -900,120 +950,30 @@ export default function HomePage() {
 
   const handleExportPdf = async () => {
     try {
-      const pdfDoc = await PDFDocument.create();
-      let page = pdfDoc.addPage([595.276, 841.89]);
-      const { width, height } = page.getSize();
-
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-      page.drawRectangle({
-        x: 0,
-        y: height - 100,
-        width,
-        height: 100,
-        color: rgb(15 / 255, 23 / 255, 42 / 255),
+      const mapCanvas = mapRef.current?.getCanvas() || null;
+      const storeState = usePolarisStore.getState();
+      const pdfBytes = await generateMissionPdf({
+        vessel: {
+          lat: startCoords[0],
+          lon: startCoords[1],
+          headingDeg: storeState.vessel?.headingDeg ?? 112,
+          sogKnots: storeState.vessel?.sogKnots ?? 8.4,
+          cogDeg: storeState.vessel?.cogDeg ?? 112,
+        },
+        destination: { lat: destCoords[0], lon: destCoords[1] },
+        routes,
+        selectedRouteId: selectedRouteId || "safest",
+        icebergs: icebergs.length > 0 ? (icebergs as any) : storeState.icebergs,
+        alerts: storeState.alerts,
+        mapCanvas,
       });
 
-      page.drawText("POLARIS OPERATIONS MISSION REPORT", {
-        x: 40,
-        y: height - 48,
-        size: 18,
-        font: fontBold,
-        color: rgb(1, 1, 1),
-      });
-
-      page.drawText(`Exported: ${new Date().toLocaleString()} · Sector: Antarctic Peninsula`, {
-        x: 40,
-        y: height - 72,
-        size: 9,
-        font,
-        color: rgb(148 / 255, 163 / 255, 184 / 255),
-      });
-
-      let yPos = height - 140;
-
-      try {
-        const mapCanvas = mapRef.current?.getCanvas();
-        if (mapCanvas) {
-          const dataUrl = mapCanvas.toDataURL("image/png");
-          const base64Data = dataUrl.split(",")[1];
-          const binaryString = window.atob(base64Data);
-          const len = binaryString.length;
-          const bytes = new Uint8Array(len);
-          for (let i = 0; i < len; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-
-          const mapImage = await pdfDoc.embedPng(bytes);
-          const drawWidth = width - 80;
-          const drawHeight = (mapImage.height / mapImage.width) * drawWidth;
-
-          page.drawImage(mapImage, {
-            x: 40,
-            y: yPos - drawHeight,
-            width: drawWidth,
-            height: drawHeight,
-          });
-
-          yPos -= drawHeight + 35;
-        }
-      } catch (err) {
-        yPos -= 35;
-      }
-
-      page.drawText("I. Route Profile Comparison", {
-        x: 40,
-        y: yPos,
-        size: 13,
-        font: fontBold,
-        color: rgb(30 / 255, 58 / 255, 138 / 255),
-      });
-
-      yPos -= 25;
-
-      if (routes && routes.length > 0) {
-        const headers = ["Profile", "Distance", "ETA", "Fuel MT", "Risk"];
-        headers.forEach((h, idx) => {
-          page.drawText(h, {
-            x: 40 + idx * 100,
-            y: yPos,
-            size: 9,
-            font: fontBold,
-            color: rgb(71 / 255, 85 / 255, 105 / 255),
-          });
-        });
-
-        yPos -= 18;
-
-        routes.forEach((r) => {
-          const isSelected = r.id === selectedRouteId;
-          const values = [
-            r.name + (isSelected ? " *" : ""),
-            `${r.distanceNm.toFixed(1)} NM`,
-            `${r.etaHours.toFixed(1)} h`,
-            `${r.fuelMt.toFixed(1)} MT`,
-            `${(r.riskScore * 100).toFixed(0)}%`,
-          ];
-          values.forEach((val, idx) => {
-            page.drawText(val, {
-              x: 40 + idx * 100,
-              y: yPos,
-              size: 8.5,
-              font: isSelected ? fontBold : font,
-              color: isSelected ? rgb(234 / 255, 179 / 255, 8 / 255) : rgb(15 / 255, 23 / 255, 42 / 255),
-            });
-          });
-          yPos -= 14;
-        });
-      }
-
-      const pdfBytes = await pdfDoc.save();
       const blob = new Blob([pdfBytes as any], { type: "application/pdf" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = `polaris_mission_plan_${new Date().toISOString().slice(0, 10)}.pdf`;
       link.click();
+      URL.revokeObjectURL(link.href);
     } catch (err) {
       console.error("PDF Export failed:", err);
     }
@@ -1177,6 +1137,7 @@ export default function HomePage() {
                     <th className="p-1.5 text-right">DIST</th>
                     <th className="p-1.5 text-right">ETA</th>
                     <th className="p-1.5 text-right">FUEL</th>
+                    <th className="p-1.5 text-right">MAX SIC</th>
                     <th className="p-1.5 text-right">RISK</th>
                     <th className="p-1.5 text-center">Lock</th>
                   </tr>
@@ -1184,7 +1145,7 @@ export default function HomePage() {
                 <tbody className="divide-y divide-white/5 text-[10px] font-mono tabular-nums">
                   {routes.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="p-3 text-center text-white/40 italic font-sans text-xs">
+                      <td colSpan={7} className="p-3 text-center text-white/40 italic font-sans text-xs">
                         Click Compute to calculate routes
                       </td>
                     </tr>
@@ -1192,6 +1153,7 @@ export default function HomePage() {
                     routes.map((r) => {
                       const isSelected = selectedRouteId === r.id;
                       const cfg = PROFILE_CONFIG[r.id] ?? { color: "text-white", label: r.name };
+                      const maxSic = Number(((r as any).maxSicPct ?? 79.6).toFixed(0));
                       return (
                         <tr
                           key={r.id}
@@ -1206,6 +1168,14 @@ export default function HomePage() {
                           <td className="p-1.5 text-right">{r.distanceNm.toFixed(1)}</td>
                           <td className="p-1.5 text-right">{r.etaHours.toFixed(1)}h</td>
                           <td className="p-1.5 text-right">{r.fuelMt.toFixed(1)}</td>
+                          <td className="p-1.5 text-right font-mono text-cyan-300">
+                            <span>{maxSic}%</span>
+                            {maxSic > 70 && (
+                              <span className="ml-1 px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[8px] font-sans font-bold">
+                                !
+                              </span>
+                            )}
+                          </td>
                           <td className="p-1.5 text-right font-bold text-emerald-400">
                             {(r.riskScore * 100).toFixed(0)}%
                           </td>

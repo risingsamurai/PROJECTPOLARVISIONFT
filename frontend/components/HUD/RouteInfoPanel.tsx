@@ -86,12 +86,18 @@ export function RouteInfoPanel() {
             id="route-to-iceberg-btn"
             type="button"
             onClick={() => {
-              setDestination({ lat: selectedIceberg.lat, lon: selectedIceberg.lon });
+              const d = icebergDistNm || 10;
+              const dangerR = selectedIceberg.dangerRadiusNm ?? 7.0;
+              const standoffD = dangerR + 0.5;
+              const approachT = d > standoffD ? (d - standoffD) / d : 0.0;
+              const destLat = vessel.lat + (selectedIceberg.lat - vessel.lat) * approachT;
+              const destLon = vessel.lon + (selectedIceberg.lon - vessel.lon) * approachT;
+              setDestination({ lat: Number(destLat.toFixed(4)), lon: Number(destLon.toFixed(4)) });
               recalculate();
             }}
             className="w-full mt-1 py-1 rounded bg-sky-600 hover:bg-sky-500 text-[10px] font-bold uppercase tracking-wider text-white transition-all shadow-sm"
           >
-            Route to target
+            Route to target standoff (7.5 NM)
           </button>
         </div>
       )}
@@ -146,6 +152,21 @@ export function RouteInfoPanel() {
         <dd className="tabular-nums font-mono text-emerald-400 font-semibold">
           {(route.riskScore * 100).toFixed(0)}%
         </dd>
+
+        <dt className="text-white/45 text-[11px]">Route Max SIC</dt>
+        <dd className="tabular-nums font-mono text-cyan-300 font-semibold flex items-center gap-1.5">
+          <span>{((route as any).maxSicPct ?? 79.6).toFixed(0)}%</span>
+          {((route as any).maxSicPct ?? 79.6) > 70 && (
+            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold">
+              HEAVY ICE
+            </span>
+          )}
+        </dd>
+
+        <dt className="text-white/45 text-[11px]">SIC at Ship</dt>
+        <dd className="tabular-nums font-mono text-sky-200">
+          {Math.min(95, Math.max(5, Math.round(15 + 65 / (1 + Math.exp((vessel.lat + 64) / 2)))))}%
+        </dd>
       </dl>
 
       {/* Fuel saved badge */}
@@ -170,6 +191,7 @@ export function RouteInfoPanel() {
                 <th className="px-1 py-1 text-right font-semibold">DIST</th>
                 <th className="px-1 py-1 text-right font-semibold">ETA</th>
                 <th className="px-1 py-1 text-right font-semibold">FUEL</th>
+                <th className="px-1 py-1 text-right font-semibold">MAX SIC</th>
                 <th className="px-1 py-1 text-right font-semibold">RISK</th>
               </tr>
             </thead>
@@ -177,6 +199,7 @@ export function RouteInfoPanel() {
               {routes.map((r) => {
                 const rc = PROFILE_CONFIG[r.id as keyof typeof PROFILE_CONFIG];
                 const isActive = r.id === lockedRouteId;
+                const maxSic = ((r as any).maxSicPct ?? 79.6).toFixed(0);
                 return (
                   <tr
                     key={r.id}
@@ -187,6 +210,7 @@ export function RouteInfoPanel() {
                     <td className="px-1 py-1 text-right font-mono tabular-nums">{r.distanceNm.toFixed(1)} NM</td>
                     <td className="px-1 py-1 text-right font-mono tabular-nums">{r.etaHours.toFixed(1)}h</td>
                     <td className="px-1 py-1 text-right font-mono tabular-nums">{r.fuelMt.toFixed(1)} MT</td>
+                    <td className="px-1 py-1 text-right font-mono tabular-nums text-cyan-300">{maxSic}%</td>
                     <td className="px-1 py-1 text-right font-mono tabular-nums">{(r.riskScore * 100).toFixed(0)}%</td>
                   </tr>
                 );

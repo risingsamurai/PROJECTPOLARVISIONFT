@@ -93,15 +93,31 @@ export function IcebergInfoPanel() {
             </>
           )}
           <div className="col-span-2 pt-2 mt-2 border-t border-white/10">
+            {vessel && (() => {
+              const d = haversineNm(vessel, iceberg);
+              const dangerR = iceberg.dangerRadiusNm || 7.0;
+              const standoff = (dangerR + 0.5).toFixed(1);
+              return (
+                <div className="mb-2 text-[10px] text-cyan-300/80 font-mono bg-cyan-950/40 p-1.5 rounded border border-cyan-500/20">
+                  Approach point: {standoff} NM standoff from {iceberg.name} (dist {d.toFixed(1)} NM)
+                </div>
+              );
+            })()}
             <button
               type="button"
               onClick={() => {
                 if (!iceberg || !vessel) return;
-                const dest = { lat: iceberg.lat, lon: iceberg.lon };
+                const d = haversineNm(vessel, iceberg);
+                const dangerR = iceberg.dangerRadiusNm || 7.0;
+                const standoffD = dangerR + 0.5;
+                const approachT = d > standoffD ? (d - standoffD) / d : 0.0;
+                const destLat = vessel.lat + (iceberg.lat - vessel.lat) * approachT;
+                const destLon = vessel.lon + (iceberg.lon - vessel.lon) * approachT;
+                const dest = { lat: Number(destLat.toFixed(4)), lon: Number(destLon.toFixed(4)) };
                 usePolarisStore.getState().setDestination(dest);
                 usePolarisStore
                   .getState()
-                  .fetchRoutesIfNeeded([vessel.lat, vessel.lon], [iceberg.lat, iceberg.lon], true);
+                  .fetchRoutesIfNeeded([vessel.lat, vessel.lon], [dest.lat, dest.lon], true);
               }}
               className="w-full py-1.5 px-3 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 text-white text-[11px] font-bold font-sans transition-all flex items-center justify-center gap-1.5 shadow-lg border border-emerald-400/40"
             >

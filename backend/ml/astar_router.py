@@ -27,6 +27,35 @@ def _ice_at(lat: float, lon: float) -> float:
     return max(0.0, min(1.0, zonal + peninsula_pack))
 
 
+def _berg_hard_radius(b: dict) -> float:
+    """Calculates hard obstacle boundary: physical radius + clearance (max(1.5 NM, 25% of radius))."""
+    diam = b.get("diameterNm")
+    if diam is None:
+        diam = 0.6 + (abs(hash(b.get("name", ""))) % 25) / 10.0
+    phys_r = float(diam) / 2.0
+    clearance = max(1.5, 0.25 * phys_r)
+    return phys_r + clearance
+
+
+def _is_segment_berg_blocked(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    bergs: Iterable[dict],
+    num_samples: int = 10,
+) -> bool:
+    """Checks if a path segment intersects the hard clearance radius of any iceberg."""
+    for b in bergs:
+        b_pos = (b["lat"], b["lon"])
+        hard_r = _berg_hard_radius(b)
+        for i in range(num_samples + 1):
+            t = i / float(num_samples)
+            s_lat = p1[0] + (p2[0] - p1[0]) * t
+            s_lon = p1[1] + (p2[1] - p1[1]) * t
+            if _haversine_nm((s_lat, s_lon), b_pos) < hard_r:
+                return True
+    return False
+
+
 def _berg_penalty(lat: float, lon: float, bergs: Iterable[dict], radius_nm: float) -> float:
     p = 0.0
     for b in bergs:
@@ -48,7 +77,7 @@ def astar(
     corridor_bias: float = 0.0,
     max_iter: int = 15000,
 ) -> list[tuple[float, float]]:
-    """Runs land-avoiding, ice-aware, iceberg-avoiding A* search with strictly non-negative edge costs."""
+    """Runs land-avoiding, ice-aware, iceberg-avoiding A* search with strict hard-obstacle iceberg bodies."""
     s = (float(start[0]), float(start[1]))
     d = (float(dest[0]), float(dest[1]))
     step_nm = step * 60.0
@@ -91,7 +120,7 @@ def astar(
         visited.add(current)
 
         if _haversine_nm(current, d) < step_nm * 1.5:
-            if not is_segment_land(current, d):
+            if not is_segment_land(current, d) and not _is_segment_berg_blocked(current, d, rel_bergs):
                 path = [d]
                 curr: tuple[float, float] | None = current
                 while curr is not None:
@@ -106,8 +135,10 @@ def astar(
             if nxt in visited or is_land(nxt[0], nxt[1]):
                 continue
 
-            # Prevent stepping across or corner-cutting any land or islets
+            # Prevent stepping across or corner-cutting any land, islets, or iceberg hard bodies
             if is_segment_land(current, nxt, num_samples=6):
+                continue
+            if _is_segment_berg_blocked(current, nxt, rel_bergs, num_samples=6):
                 continue
 
             ice = _ice_at(*nxt)
@@ -130,8 +161,13 @@ def astar(
     return [s, d]
 
 
-def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius: float, max_lookahead: int = 6) -> list[tuple[float, float]]:
-    """Removes unnecessary zig-zag nodes if direct line-of-sight is land-free, ice-safe, and hazard-free."""
+def _smooth_path(
+    path: list[tuple[float, float]],
+    bergs: list[dict],
+    berg_radius: float,
+    max_lookahead: int = 6,
+) -> list[tuple[float, float]]:
+    """Removes unnecessary zig-zag nodes if direct line-of-sight is land-free, ice-safe, and iceberg-free."""
     if len(path) <= 2:
         return path
     smoothed = [path[0]]
@@ -144,6 +180,9 @@ def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius
             p2 = path[test_idx]
             if is_segment_land(p1, p2):
                 continue
+            if _is_segment_berg_blocked(p1, p2, bergs, num_samples=12):
+                continue
+            
             hazard = False
             for b in bergs:
                 b_pos = (b["lat"], b["lon"])
@@ -169,7 +208,33 @@ def _smooth_path(path: list[tuple[float, float]], bergs: list[dict], berg_radius
 
         smoothed.append(path[best_next])
         curr = best_next
+
+    # Safety assertion: Ensure no segment of smoothed path violates hard obstacle boundary
+    for i in range(len(smoothed) - 1):
+        if _is_segment_berg_blocked(smoothed[i], smoothed[i+1], bergs, num_samples=15):
+            return path  # Revert to unsmoothed path if smoothing cut a corner
+
     return smoothed
+
+
+def _calculate_route_ice_stats(pts: list[tuple[float, float]]) -> tuple[float, float]:
+    """Computes along-route max SIC (%) and mean SIC (%) interpolated every ~5 NM."""
+    if not pts or len(pts) < 2:
+        return 0.0, 0.0
+    samples: list[float] = []
+    for i in range(len(pts) - 1):
+        p1, p2 = pts[i], pts[i + 1]
+        seg_d = _haversine_nm(p1, p2)
+        n_steps = max(1, int(math.ceil(seg_d / 5.0)))
+        for k in range(n_steps):
+            t = k / float(n_steps)
+            lat = p1[0] + (p2[0] - p1[0]) * t
+            lon = p1[1] + (p2[1] - p1[1]) * t
+            samples.append(_ice_at(lat, lon) * 100.0)
+    samples.append(_ice_at(pts[-1][0], pts[-1][1]) * 100.0)
+    max_sic = max(samples) if samples else 0.0
+    mean_sic = sum(samples) / len(samples) if samples else 0.0
+    return round(max_sic, 1), round(mean_sic, 1)
 
 
 def _calculate_dynamic_risk(pts: list[tuple[float, float]], bergs: list[dict], profile: str) -> float:
@@ -241,6 +306,7 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
         eta = nm / speed if speed else nm
         fuel = nm * fuel_rate
         dynamic_risk = _calculate_dynamic_risk(raw_pts, bergs, rid)
+        max_sic, mean_sic = _calculate_route_ice_stats(raw_pts)
 
         out.append(
             {
@@ -250,6 +316,8 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
                 "etaHours": round(eta, 1),
                 "fuelMt": round(fuel, 1),
                 "riskScore": dynamic_risk,
+                "maxSicPct": max_sic,
+                "meanSicPct": mean_sic,
                 "points": [{"lat": round(p[0], 4), "lon": round(p[1], 4)} for p in raw_pts],
             }
         )

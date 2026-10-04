@@ -8,36 +8,8 @@ import { haversineNm, headingToVector, latLonToScene, sceneToLatLon } from "@/li
 import { getWaveHeightAt } from "./Ocean";
 
 function WakeTrail({ speed }: { speed: number }) {
-  const wakeLen = 32;
-  const geom = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(3.5, wakeLen, 4, 16);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i);
-      const t = (wakeLen / 2 - y) / wakeLen; 
-      let x = pos.getX(i);
-      x *= 1.0 + t * 0.9;
-      pos.setX(i, x);
-    }
-    geo.translate(0, -wakeLen / 2 - 3.2, 0);
-    geo.rotateX(-Math.PI / 2);
-    return geo;
-  }, []);
-
-  return (
-    <mesh geometry={geom} position={[0, 0.05, 0]}>
-      <meshPhysicalMaterial
-        color="#cfe8f5"
-        transmission={0.9}
-        roughness={0.1}
-        ior={1.3}
-        transparent={true}
-        opacity={0.4}
-        depthWrite={false}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
-  );
+  // Wake plane removed to eliminate static grey band artifact over ocean surface
+  return null;
 }
 
 // 3D Polar Icebreaker Model

@@ -67,11 +67,11 @@ export function useAlertEngine() {
         return;
       }
 
-      // --- B. Sea Ice concentration Check (WARNING) ---
+      // --- B. Sea Ice Concentration Multi-tier Checks (>90% CRITICAL, >70% WARNING, >40% INFO) ---
+      let localSic = 0.0;
       if (iceGrid && iceGrid.length > 0) {
         let closestCell = null;
         let minCellDist = 999999;
-
         for (const cell of iceGrid) {
           const dlat = cell.lat - lat;
           const dlon = cell.lon - lon;
@@ -81,21 +81,72 @@ export function useAlertEngine() {
             closestCell = cell;
           }
         }
+        if (closestCell) {
+          localSic = closestCell.sic;
+        }
+      } else {
+        // Fallback continuous model
+        localSic = Math.min(0.95, Math.max(0.05, 0.15 + 0.65 / (1 + Math.exp((lat + 64.0) / 2.0))));
+      }
 
-        if (closestCell && closestCell.sic > alertConfig.warning_ice_concentration) {
-          const sicPct = (closestCell.sic * 100).toFixed(0);
-          const limitPct = (alertConfig.warning_ice_concentration * 100).toFixed(0);
-          const message = `WARNING: Ice concentration in immediate area exceeds limit: ${sicPct}% (Threshold: ${limitPct}%)`;
+      const sicPct = Math.round(localSic * 100);
 
-          if (lastActiveAlertRef.current?.tier !== "WARNING") {
-            pushAlert("WARNING", message);
-            lastActiveAlertRef.current = { tier: "WARNING" };
+      if (sicPct > 90) {
+        const msg = `CRITICAL: Extreme pack ice density: ${sicPct}% (>90%). High structural resistance — advise rerouting or switching to Safest.`;
+        if (lastActiveAlertRef.current?.tier !== "CRITICAL_ICE") {
+          pushAlert("CRITICAL", msg);
+          lastActiveAlertRef.current = { tier: "CRITICAL_ICE" };
+        }
+        return;
+      } else if (sicPct > 70) {
+        const msg = `WARNING: Ice concentration exceeds safe operating threshold: ${sicPct}% (Limit: 70%)`;
+        if (lastActiveAlertRef.current?.tier !== "WARNING_ICE") {
+          pushAlert("WARNING", msg);
+          lastActiveAlertRef.current = { tier: "WARNING_ICE" };
+        }
+        return;
+      } else if (sicPct > 40) {
+        const msg = `INFO: Vessel operating in marginal ice zone: ${sicPct}% concentration (>40% threshold).`;
+        if (lastActiveAlertRef.current?.tier !== "INFO_ICE") {
+          pushAlert("INFO", msg);
+          lastActiveAlertRef.current = { tier: "INFO_ICE" };
+        }
+        return;
+      }
+
+      // --- C. Look-Ahead Alert: Route crosses >70% within 50 NM ---
+      const activeRoute = routes.find((r) => r.id === usePolarisStore.getState().lockedRouteId) || routes[0];
+      if (activeRoute && activeRoute.points && activeRoute.points.length > 1) {
+        let cumDist = 0;
+        let lookaheadPackDist: number | null = null;
+        let lookaheadPackSic = 0;
+
+        for (let i = 0; i < activeRoute.points.length - 1; i++) {
+          const p1 = activeRoute.points[i];
+          const p2 = activeRoute.points[i + 1];
+          const segDist = haversineNm(p1, p2);
+          const pLat = p2.lat;
+          const pSic = Math.round((0.15 + 0.65 / (1 + Math.exp((pLat + 64.0) / 2.0))) * 100);
+
+          if (cumDist + segDist <= 50 && pSic > 70) {
+            lookaheadPackDist = Math.round(cumDist + segDist);
+            lookaheadPackSic = pSic;
+            break;
+          }
+          cumDist += segDist;
+        }
+
+        if (lookaheadPackDist !== null) {
+          const msg = `WARNING: Look-ahead hazard — Active route penetrates heavy ice pack (${lookaheadPackSic}%) in ${lookaheadPackDist} NM.`;
+          if (lastActiveAlertRef.current?.tier !== "LOOKAHEAD_ICE") {
+            pushAlert("WARNING", msg);
+            lastActiveAlertRef.current = { tier: "LOOKAHEAD_ICE" };
           }
           return;
         }
       }
 
-      // --- C. Clear State Check ---
+      // --- D. Clear State Check ---
       if (lastActiveAlertRef.current === null || lastActiveAlertRef.current.tier !== "CLEAR") {
         pushAlert("CLEAR", "All hazards outside safe radius");
         lastActiveAlertRef.current = { tier: "CLEAR" };

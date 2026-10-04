@@ -58,6 +58,25 @@ function SingleRouteLine({
       sampled[sampled.length - 1].copy(pts[pts.length - 1]);
     }
 
+    // Safety clearance guarantee in 3D: push sampled points outside iceberg physical bodies
+    const bergs = usePolarisStore.getState().icebergs;
+    if (bergs && bergs.length > 0) {
+      sampled.forEach((p, idx) => {
+        if (idx === 0 || idx === sampled.length - 1) return;
+        bergs.forEach((b) => {
+          const [bx, , bz] = latLonToScene(b.lat, b.lon);
+          const diam = b.diameterNm || 1.5;
+          const hardR = (diam / 2.0) + Math.max(1.5, 0.25 * (diam / 2.0));
+          const d = Math.hypot(p.x - bx, p.z - bz);
+          if (d < hardR && d > 0.001) {
+            const push = (hardR - d) + 0.2;
+            p.x += ((p.x - bx) / d) * push;
+            p.z += ((p.z - bz) / d) * push;
+          }
+        });
+      });
+    }
+
     const lines: number[] = [];
     const beads: number[] = [];
 

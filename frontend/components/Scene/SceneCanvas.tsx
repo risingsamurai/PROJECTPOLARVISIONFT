@@ -12,7 +12,6 @@ import { Ocean } from "./Ocean";
 import { RouteLine } from "./RouteLine";
 import { Vessel } from "./Vessel";
 import { AntarcticLandmass } from "./AntarcticLandmass";
-import { DestinationBeacon } from "./DestinationBeacon";
 
 function PanoramaEnvironment() {
   const { scene, gl } = useThree();
@@ -191,7 +190,6 @@ export function SceneCanvas() {
       <Ocean />
       <AntarcticLandmass />
       <Vessel />
-      <DestinationBeacon />
       <IcebergField />
       <DangerZones />
       <RouteLine />
