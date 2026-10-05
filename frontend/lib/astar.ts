@@ -15,7 +15,7 @@ function nm(a: Node, b: Node) {
 export function astarClient(
   start: Node,
   dest: Node,
-  bergs: { lat: number; lon: number }[],
+  bergs: { lat: number; lon: number; dangerRadiusNm?: number; predictedPath?: { lat: number; lon: number; hour?: number }[] }[],
   avoid: number
 ): Node[] {
   const step = 0.25;
@@ -35,6 +35,8 @@ export function astarClient(
     [step, -step],
     [-step, step],
   ];
+  const effectiveAvoid = Math.max(avoid, 8.0);
+
   for (let i = 0; i < 4000 && open.length; i++) {
     open.sort((a, b) => a.f - b.f);
     const current = open.shift()!.n;
@@ -53,11 +55,28 @@ export function astarClient(
         lat: +((current.lat + dlat).toFixed(2)),
         lon: +((current.lon + dlon).toFixed(2)),
       };
-      const bergPen = bergs.reduce((acc, b) => {
-        const d = nm(nxt, b);
-        return acc + (d < avoid ? (avoid - d) ** 2 : 0);
-      }, 0);
-      const tentative = (g.get(key(current)) ?? 1e9) + nm(current, nxt) + bergPen * 0.4;
+      
+      let bergPen = 0;
+      for (const b of bergs) {
+        const d0 = nm(nxt, b);
+        const reqR = Math.max(effectiveAvoid, b.dangerRadiusNm || 7.0);
+        if (d0 < reqR) {
+          bergPen += ((reqR - d0) / reqR) ** 2 * 40.0;
+        }
+        if (b.predictedPath) {
+          for (const pt of b.predictedPath) {
+            if ((pt.hour ?? 1) > 0) {
+              const dPred = nm(nxt, pt);
+              const predR = 6.0;
+              if (dPred < predR) {
+                bergPen += ((predR - dPred) / predR) ** 2 * 25.0;
+              }
+            }
+          }
+        }
+      }
+
+      const tentative = (g.get(key(current)) ?? 1e9) + nm(current, nxt) + bergPen;
       if (tentative < (g.get(key(nxt)) ?? 1e9)) {
         g.set(key(nxt), tentative);
         came.set(key(nxt), key(current));

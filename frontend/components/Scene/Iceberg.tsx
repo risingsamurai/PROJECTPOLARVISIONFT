@@ -303,11 +303,11 @@ export function IcebergMesh({
 
   const dangerRadius = iceberg.dangerRadiusNm || 7.0;
 
-  // Visual footprint radius: max(0.45 * dangerRadius, 5.0) capped at 0.75 * dangerRadius
+  // Visual footprint radius: decent big (prominent and distinct in polar 3D view)
   const visualRadius = THREE.MathUtils.clamp(
-    dangerRadius * 0.48,
-    4.5,
-    dangerRadius * 0.75
+    dangerRadius * 0.72,
+    6.2,
+    dangerRadius * 1.05
   );
 
   // Tabular classification: name starts with A, D or diameter >= 3 NM
@@ -316,7 +316,7 @@ export function IcebergMesh({
     iceberg.name?.startsWith("D") ||
     (iceberg.diameterNm && iceberg.diameterNm >= 2.5);
 
-  const sizeClass = isTabular ? "large" : visualRadius > 6.0 ? "medium" : "small";
+  const sizeClass = isTabular ? "large" : visualRadius > 7.5 ? "medium" : "small";
   const quality = usePolarisStore((s) => s.graphicsQuality || "high");
 
   const geo = useMemo(() => {
@@ -331,7 +331,7 @@ export function IcebergMesh({
     if (!iceberg.predictedPath) return [];
     return iceberg.predictedPath.map((p) => {
       const [px, , pz] = latLonToScene(p.lat, p.lon);
-      return new THREE.Vector3(px, 0.3, pz);
+      return { ...p, x: px, y: 0.3, z: pz };
     });
   }, [iceberg.predictedPath]);
 
@@ -402,30 +402,53 @@ export function IcebergMesh({
       {/* Selected Iceberg Indicator Ring */}
       {selected && (
         <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[visualRadius * 1.25, visualRadius * 1.4, 32]} />
+          <ringGeometry args={[visualRadius * 1.15, visualRadius * 1.3, 36]} />
           <meshBasicMaterial color="#38bdf8" transparent opacity={0.9} />
         </mesh>
       )}
 
-      {/* Predicted Drift Trajectory Line */}
-      {showPred && pathPts.length > 1 && (
-        <line>
-          <bufferGeometry attach="geometry">
-            <bufferAttribute
-              attach="attributes-position"
-              array={new Float32Array(pathPts.flatMap((p) => [p.x - x, p.y, p.z - z]))}
-              count={pathPts.length}
-              itemSize={3}
+      {/* Predicted Drift Trajectory Line & 3D Waypoint Nodes */}
+      {(showPred || selected) && pathPts.length > 1 && (
+        <group>
+          <line>
+            <bufferGeometry attach="geometry">
+              <bufferAttribute
+                attach="attributes-position"
+                array={new Float32Array(pathPts.flatMap((p) => [p.x - x, p.y, p.z - z]))}
+                count={pathPts.length}
+                itemSize={3}
+              />
+            </bufferGeometry>
+            <lineDashedMaterial
+              color={selected ? "#38bdf8" : "#0284c7"}
+              dashSize={0.9}
+              gapSize={0.4}
+              transparent
+              opacity={selected ? 0.95 : 0.75}
             />
-          </bufferGeometry>
-          <lineDashedMaterial
-            color="#38bdf8"
-            dashSize={0.8}
-            gapSize={0.4}
-            transparent
-            opacity={0.85}
-          />
-        </line>
+          </line>
+
+          {/* 3D Future Drift Prediction Waypoints (+24h, +48h, +72h) */}
+          {pathPts.slice(1).map((pt) => {
+            const relX = pt.x - x;
+            const relZ = pt.z - z;
+            const errRadius = Math.max(1.8, 3.5 * Math.sqrt(pt.hour / 24));
+            const nodeCol = pt.hour === 24 ? "#10b981" : pt.hour === 48 ? "#f59e0b" : "#a855f7";
+            return (
+              <group key={pt.hour} position={[relX, 0.25, relZ]}>
+                <mesh>
+                  <sphereGeometry args={[0.7, 16, 16]} />
+                  <meshBasicMaterial color={nodeCol} />
+                </mesh>
+                <mesh rotation={[-Math.PI / 2, 0, 0]}>
+                  <ringGeometry args={[errRadius * 0.92, errRadius, 32]} />
+                  <meshBasicMaterial color={nodeCol} transparent opacity={0.4} />
+                </mesh>
+                <IcebergPredHourTag hour={pt.hour} color={nodeCol} />
+              </group>
+            );
+          })}
+        </group>
       )}
 
       {/* Floating 3D Sprite Iceberg Label (Only nearest 5 or selected) */}
@@ -434,10 +457,50 @@ export function IcebergMesh({
           name={iceberg.name}
           isHighRisk={iceberg.highRisk}
           isSelected={selected}
-          yPos={visualRadius * 0.45 + 1.2}
+          yPos={visualRadius * 0.45 + 1.8}
         />
       )}
     </group>
+  );
+}
+
+function IcebergPredHourTag({ hour, color }: { hour: number; color: string }) {
+  const texture = useMemo(() => {
+    if (typeof document === "undefined") return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = 128;
+    canvas.height = 48;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.fillStyle = "rgba(15, 23, 42, 0.9)";
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(2, 2, 124, 44, 8);
+    } else {
+      ctx.rect(2, 2, 124, 44);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 20px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`+${hour}h`, 64, 25);
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }, [hour, color]);
+
+  if (!texture) return null;
+
+  return (
+    <sprite position={[0, 2.2, 0]} scale={[3.8, 1.4, 1]}>
+      <spriteMaterial map={texture} transparent depthTest={false} fog={false} />
+    </sprite>
   );
 }
 

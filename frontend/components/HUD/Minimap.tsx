@@ -9,6 +9,7 @@ const ORIGIN = { x: 95, y: 95 };
 export function Minimap() {
   const vessel = usePolarisStore((s) => s.vessel);
   const icebergs = usePolarisStore((s) => s.icebergs);
+  const selectedIcebergId = usePolarisStore((s) => s.selectedIcebergId);
   const route = usePolarisStore(selectLockedRoute);
   const [vx, , vz] = latLonToScene(vessel.lat, vessel.lon);
 
@@ -85,9 +86,10 @@ export function Minimap() {
           />
 
           {/* Icebergs & Danger Zones */}
-          {icebergs.slice(0, 24).map((ib) => {
+          {icebergs.slice(0, 32).map((ib) => {
             const p = to(ib.lat, ib.lon);
-            if (p.x < -10 || p.x > 200 || p.y < -10 || p.y > 200) return null;
+            const isSelected = ib.id === selectedIcebergId;
+            if (p.x < -15 || p.x > 205 || p.y < -15 || p.y > 205) return null;
             return (
               <g key={ib.id}>
                 {ib.highRisk && (
@@ -102,12 +104,52 @@ export function Minimap() {
                     strokeOpacity="0.6"
                   />
                 )}
+                {isSelected && (
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={9}
+                    fill="none"
+                    stroke="#38bdf8"
+                    strokeWidth="1.5"
+                    strokeDasharray="2 2"
+                  />
+                )}
                 <circle
                   cx={p.x}
                   cy={p.y}
-                  r={ib.highRisk ? 3.5 : 2.5}
-                  fill={ib.highRisk ? "#ef4444" : "#e0f2fe"}
+                  r={isSelected ? 4 : ib.highRisk ? 3.5 : 2.5}
+                  fill={isSelected ? "#38bdf8" : ib.highRisk ? "#ef4444" : "#e0f2fe"}
                 />
+                {/* Draw 72h LSTM Prediction Drift for Selected Berg */}
+                {isSelected && ib.predictedPath && ib.predictedPath.length > 1 && (
+                  <g>
+                    <polyline
+                      points={ib.predictedPath
+                        .map((pt) => {
+                          const wp = to(pt.lat, pt.lon);
+                          return `${wp.x.toFixed(1)},${wp.y.toFixed(1)}`;
+                        })
+                        .join(" ")}
+                      fill="none"
+                      stroke="#38bdf8"
+                      strokeWidth="1.5"
+                      strokeDasharray="2 1"
+                    />
+                    {ib.predictedPath.slice(1).map((pt) => {
+                      const wp = to(pt.lat, pt.lon);
+                      return (
+                        <circle
+                          key={pt.hour}
+                          cx={wp.x}
+                          cy={wp.y}
+                          r={2}
+                          fill={pt.hour === 24 ? "#10b981" : pt.hour === 48 ? "#f59e0b" : "#c084fc"}
+                        />
+                      );
+                    })}
+                  </g>
+                )}
               </g>
             );
           })}

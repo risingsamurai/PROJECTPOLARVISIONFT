@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertBanner } from "@/components/HUD/AlertBanner";
 import { AutoControls } from "@/components/HUD/AutoControls";
@@ -48,12 +48,17 @@ const KEY_MAP: Record<string, keyof KeysDown> = {
 };
 
 export default function SimulationPage() {
+  const [mounted, setMounted] = useState(false);
   const setKey = usePolarisStore((s) => s.setKey);
   const setIcebergs = usePolarisStore((s) => s.setIcebergs);
   const setDataReality = usePolarisStore((s) => s.setDataReality);
   const pushDetection = usePolarisStore((s) => s.pushDetection);
   const fetchRoutesIfNeeded = usePolarisStore((s) => s.fetchRoutesIfNeeded);
   const warpTarget = usePolarisStore((s) => s.warpTarget);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Watch for warpTarget changing from 2D map:
   // 1. Move the ship's position to that exact lat/lon
@@ -172,66 +177,68 @@ export default function SimulationPage() {
         <SceneCanvas />
       </div>
       <ProximityFlashOverlay />
-      <div className="pointer-events-none absolute inset-0 p-3 flex flex-col gap-3">
-        <div className="pointer-events-auto space-y-2">
-          <TopBar />
-          <AlertBanner />
-        </div>
-        <div className="flex-1 flex justify-between items-start pointer-events-none">
-          <div className="pointer-events-none flex flex-col gap-2">
-            <div className="pointer-events-auto">
-              <LayerControlPanel />
+      {mounted && (
+        <div className="pointer-events-none absolute inset-0 p-3 flex flex-col gap-3">
+          <div className="pointer-events-auto space-y-2">
+            <TopBar />
+            <AlertBanner />
+          </div>
+          <div className="flex-1 flex justify-between items-start pointer-events-none">
+            <div className="pointer-events-none flex flex-col gap-2">
+              <div className="pointer-events-auto">
+                <LayerControlPanel />
+              </div>
+              <div className="pointer-events-auto">
+                <IceLevelLegend />
+              </div>
+              <div className="pointer-events-auto">
+                <ForecastSlider />
+              </div>
+              <div className="pointer-events-auto">
+                <DataRealityBadge />
+              </div>
+              <div className="pointer-events-auto">
+                <Link href="/dashboard" className="hud-panel inline-block px-3 py-2 text-[10px] uppercase tracking-wide">
+                  Overview map
+                </Link>
+              </div>
             </div>
-            <div className="pointer-events-auto">
-              <IceLevelLegend />
-            </div>
-            <div className="pointer-events-auto">
-              <ForecastSlider />
-            </div>
-            <div className="pointer-events-auto">
-              <DataRealityBadge />
-            </div>
-            <div className="pointer-events-auto">
-              <Link href="/dashboard" className="hud-panel inline-block px-3 py-2 text-[10px] uppercase tracking-wide">
-                Overview map
-              </Link>
+            <div className="pointer-events-none flex flex-col gap-2 max-h-[calc(100vh-80px)] overflow-y-auto pr-1">
+              <div className="pointer-events-auto">
+                <IcebergInfoPanel />
+              </div>
+              <div className="pointer-events-auto">
+                <RouteInfoPanel />
+              </div>
+              <div className="pointer-events-auto">
+                <ReasoningPanel />
+              </div>
+              <div className="pointer-events-auto">
+                <AutoControls />
+              </div>
+              <div className="pointer-events-auto">
+                <DetectionLog />
+              </div>
+              <div className="pointer-events-auto">
+                <AlertHistoryLog />
+              </div>
+              <div className="pointer-events-auto">
+                <ExportPdfButton />
+              </div>
             </div>
           </div>
-          <div className="pointer-events-none flex flex-col gap-2 max-h-[calc(100vh-80px)] overflow-y-auto pr-1">
+          <div className="flex items-end justify-between pointer-events-none">
             <div className="pointer-events-auto">
-              <IcebergInfoPanel />
+              <Minimap />
             </div>
-            <div className="pointer-events-auto">
-              <RouteInfoPanel />
-            </div>
-            <div className="pointer-events-auto">
-              <ReasoningPanel />
-            </div>
-            <div className="pointer-events-auto">
-              <AutoControls />
-            </div>
-            <div className="pointer-events-auto">
-              <DetectionLog />
-            </div>
-            <div className="pointer-events-auto">
-              <AlertHistoryLog />
-            </div>
-            <div className="pointer-events-auto">
-              <ExportPdfButton />
-            </div>
+            <div className="w-[200px]" />
+          </div>
+          {/* WASD Keypress Widget - fixed bottom-left, clear of left stack */}
+          <div className="fixed bottom-4 left-[280px] z-20 pointer-events-auto">
+            <WASDIndicator />
           </div>
         </div>
-        <div className="flex items-end justify-between pointer-events-none">
-          <div className="pointer-events-auto">
-            <Minimap />
-          </div>
-          <div className="w-[200px]" />
-        </div>
-        {/* WASD Keypress Widget - fixed bottom-left, clear of left stack */}
-        <div className="fixed bottom-4 left-[280px] z-20 pointer-events-auto">
-          <WASDIndicator />
-        </div>
-      </div>
+      )}
     </main>
   );
 }

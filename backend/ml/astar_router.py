@@ -28,40 +28,71 @@ def _ice_at(lat: float, lon: float) -> float:
 
 
 def _berg_hard_radius(b: dict) -> float:
-    """Calculates hard obstacle boundary: physical radius + clearance (max(1.5 NM, 25% of radius))."""
+    """Calculates hard obstacle standoff boundary: full danger radius + buffer (min 7.5 NM)."""
+    danger_r = float(b.get("dangerRadiusNm", 7.0))
     diam = b.get("diameterNm")
     if diam is None:
         diam = 0.6 + (abs(hash(b.get("name", ""))) % 25) / 10.0
     phys_r = float(diam) / 2.0
-    clearance = max(1.5, 0.25 * phys_r)
-    return phys_r + clearance
+    return max(7.2, danger_r + 0.3, phys_r + 3.0)
 
 
 def _is_segment_berg_blocked(
     p1: tuple[float, float],
     p2: tuple[float, float],
     bergs: Iterable[dict],
-    num_samples: int = 10,
+    num_samples: int = 14,
 ) -> bool:
-    """Checks if a path segment intersects the hard clearance radius of any iceberg."""
+    """Checks if a path segment intersects the danger circle or 72h drift zone of any iceberg."""
     for b in bergs:
         b_pos = (b["lat"], b["lon"])
         hard_r = _berg_hard_radius(b)
+        
+        # Check current position (T=0)
         for i in range(num_samples + 1):
             t = i / float(num_samples)
             s_lat = p1[0] + (p2[0] - p1[0]) * t
             s_lon = p1[1] + (p2[1] - p1[1]) * t
-            if _haversine_nm((s_lat, s_lon), b_pos) < hard_r:
+            d = _haversine_nm((s_lat, s_lon), b_pos)
+            if d < hard_r:
+                # If start node p1 is already inside hard_r, allow stepping strictly outward
+                if i == 0 and _haversine_nm(p1, b_pos) < hard_r:
+                    d_p1 = _haversine_nm(p1, b_pos)
+                    d_p2 = _haversine_nm(p2, b_pos)
+                    if d_p2 > d_p1:
+                        continue
                 return True
+                
+        # Check future predicted drift waypoints (T=24h, 48h, 72h)
+        for pt in b.get("predictedPath", []):
+            if pt.get("hour", 0) > 0:
+                pred_pos = (pt["lat"], pt["lon"])
+                pred_r = max(5.0, 3.8 * math.sqrt(pt["hour"] / 24.0))
+                for i in range(num_samples + 1):
+                    t = i / float(num_samples)
+                    s_lat = p1[0] + (p2[0] - p1[0]) * t
+                    s_lon = p1[1] + (p2[1] - p1[1]) * t
+                    if _haversine_nm((s_lat, s_lon), pred_pos) < pred_r:
+                        return True
     return False
 
 
 def _berg_penalty(lat: float, lon: float, bergs: Iterable[dict], radius_nm: float) -> float:
+    """Calculates repulsive cost potential from icebergs and their 72h drift trajectories."""
     p = 0.0
+    effective_radius = max(radius_nm, 12.0)
     for b in bergs:
-        d = _haversine_nm((lat, lon), (b["lat"], b["lon"]))
-        if d < radius_nm:
-            p += ((radius_nm - d) / radius_nm) ** 2
+        d0 = _haversine_nm((lat, lon), (b["lat"], b["lon"]))
+        if d0 < effective_radius:
+            p += ((effective_radius - d0) / effective_radius) ** 2 * 4.0
+            
+        for pt in b.get("predictedPath", []):
+            if pt.get("hour", 0) > 0:
+                d_pred = _haversine_nm((lat, lon), (pt["lat"], pt["lon"]))
+                pred_zone = max(8.0, 5.0 * math.sqrt(pt["hour"] / 24.0))
+                if d_pred < pred_zone:
+                    weight = 0.8 / (1.0 + pt["hour"] / 24.0)
+                    p += (((pred_zone - d_pred) / pred_zone) ** 2) * weight * 3.0
     return p
 
 
@@ -73,9 +104,9 @@ def astar(
     berg_w: float,
     dist_w: float,
     berg_radius: float,
-    step: float = 0.18,
+    step: float = 0.14,
     corridor_bias: float = 0.0,
-    max_iter: int = 15000,
+    max_iter: int = 25000,
 ) -> list[tuple[float, float]]:
     """Runs land-avoiding, ice-aware, iceberg-avoiding A* search with strict hard-obstacle iceberg bodies."""
     s = (float(start[0]), float(start[1]))
@@ -165,9 +196,9 @@ def _smooth_path(
     path: list[tuple[float, float]],
     bergs: list[dict],
     berg_radius: float,
-    max_lookahead: int = 6,
+    max_lookahead: int = 4,
 ) -> list[tuple[float, float]]:
-    """Removes unnecessary zig-zag nodes if direct line-of-sight is land-free, ice-safe, and iceberg-free."""
+    """Removes unnecessary zig-zag nodes while strictly guaranteeing that chords never enter any iceberg danger zone or drift corridor."""
     if len(path) <= 2:
         return path
     smoothed = [path[0]]
@@ -178,20 +209,35 @@ def _smooth_path(
         for test_idx in range(max_idx, curr + 1, -1):
             p1 = path[curr]
             p2 = path[test_idx]
-            if is_segment_land(p1, p2):
+            seg_len = _haversine_nm(p1, p2)
+            n_samples = max(25, int(seg_len / 0.8))
+
+            if is_segment_land(p1, p2, num_samples=n_samples):
                 continue
-            if _is_segment_berg_blocked(p1, p2, bergs, num_samples=12):
+            if _is_segment_berg_blocked(p1, p2, bergs, num_samples=n_samples):
                 continue
             
             hazard = False
+            effective_clearance = max(berg_radius, 12.0)
             for b in bergs:
                 b_pos = (b["lat"], b["lon"])
-                for s_i in range(1, 8):
-                    t = s_i / 8.0
+                hard_r = _berg_hard_radius(b)
+                req_clearance = max(hard_r, effective_clearance * 0.75)
+                for s_i in range(1, n_samples):
+                    t = s_i / float(n_samples)
                     s_lat = p1[0] + (p2[0] - p1[0]) * t
                     s_lon = p1[1] + (p2[1] - p1[1]) * t
-                    if _haversine_nm((s_lat, s_lon), b_pos) < berg_radius:
+                    if _haversine_nm((s_lat, s_lon), b_pos) < req_clearance:
                         hazard = True
+                        break
+                    # Also check predicted drift waypoints
+                    for pt in b.get("predictedPath", []):
+                        if pt.get("hour", 0) > 0:
+                            pred_r = max(5.5, 4.0 * math.sqrt(pt["hour"] / 24.0))
+                            if _haversine_nm((s_lat, s_lon), (pt["lat"], pt["lon"])) < pred_r:
+                                hazard = True
+                                break
+                    if hazard:
                         break
                 if hazard:
                     break
@@ -199,8 +245,8 @@ def _smooth_path(
                 continue
 
             orig_ice = sum(_ice_at(p[0], p[1]) for p in path[curr:test_idx + 1]) / (test_idx - curr + 1)
-            shortcut_ice = sum(_ice_at(p1[0] + (p2[0] - p1[0]) * (k / 4.0), p1[1] + (p2[1] - p1[1]) * (k / 4.0)) for k in range(5)) / 5.0
-            if shortcut_ice > orig_ice + 0.04:
+            shortcut_ice = sum(_ice_at(p1[0] + (p2[0] - p1[0]) * (k / 5.0), p1[1] + (p2[1] - p1[1]) * (k / 5.0)) for k in range(6)) / 6.0
+            if shortcut_ice > orig_ice + 0.03:
                 continue
 
             best_next = test_idx
@@ -209,10 +255,14 @@ def _smooth_path(
         smoothed.append(path[best_next])
         curr = best_next
 
-    # Safety assertion: Ensure no segment of smoothed path violates hard obstacle boundary
+    # Safety assertion: Ensure every segment of smoothed path strictly clears all land and iceberg circles
     for i in range(len(smoothed) - 1):
-        if _is_segment_berg_blocked(smoothed[i], smoothed[i+1], bergs, num_samples=15):
-            return path  # Revert to unsmoothed path if smoothing cut a corner
+        seg_len = _haversine_nm(smoothed[i], smoothed[i+1])
+        n_samples = max(30, int(seg_len / 0.5))
+        if is_segment_land(smoothed[i], smoothed[i+1], num_samples=n_samples):
+            return path  # Revert to unsmoothed path if smoothing crossed land
+        if _is_segment_berg_blocked(smoothed[i], smoothed[i+1], bergs, num_samples=n_samples):
+            return path  # Revert to unsmoothed path if smoothing compromised safety
 
     return smoothed
 
@@ -278,10 +328,10 @@ def three_routes(start: list[float], dest: list[float], bergs: list[dict]) -> li
 
     # (id, name, ice_w, berg_w, dist_w, berg_radius, speed, fuel_rate)
     specs = [
-        ("safest",   "Safest",   8.0, 50.0, 0.9, 30.0,  9.5, 0.14),
-        ("balanced", "Balanced", 2.0, 15.0, 1.0, 15.0, 12.5, 0.14),
-        ("eco",      "Eco",      1.0,  6.0, 1.1, 10.0, 10.0, 0.11),
-        ("fastest",  "Fastest",  0.3,  1.0, 1.3,  5.0, 16.0, 0.14),
+        ("safest",   "Safest",   8.0, 80.0, 0.9, 32.0,  9.5, 0.14),
+        ("balanced", "Balanced", 2.5, 35.0, 1.0, 18.0, 12.5, 0.14),
+        ("eco",      "Eco",      1.2, 20.0, 1.1, 14.0, 10.0, 0.11),
+        ("fastest",  "Fastest",  0.4, 10.0, 1.3, 10.0, 16.0, 0.14),
     ]
 
     out = []

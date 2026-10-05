@@ -19,6 +19,7 @@ import {
   Bird,
   Waves,
 } from "lucide-react";
+import { ALL_ICEBERGS } from "@/lib/mockData";
 import { fetchIcebergs } from "@/lib/api";
 import { usePolarisStore } from "@/lib/store";
 import { AlertBanner } from "@/components/HUD/AlertBanner";
@@ -62,13 +63,105 @@ const PROFILE_CONFIG: Record<string, { label: string; color: string; hex: string
   fastest:  { label: "Fastest",  color: "text-rose-400",    hex: "#ef4444" },
 };
 
+function buildIcebergFeatures(icebergList: Iceberg[]) {
+  const riskFeatures = icebergList.map((ib) => {
+    const lon = ib.lon;
+    const lat = ib.lat;
+    const radiusNm = ib.dangerRadiusNm || 7.0;
+    const points = [];
+    const numPoints = 28;
+    const radiusDeg = radiusNm / 60.0;
+    const cosLat = Math.cos((lat * Math.PI) / 180.0);
+    for (let i = 0; i < numPoints; i++) {
+      const angle = (i * 2 * Math.PI) / numPoints;
+      const dx = (Math.sin(angle) * radiusDeg) / cosLat;
+      const dy = Math.cos(angle) * radiusDeg;
+      points.push([lon + dx, lat + dy]);
+    }
+    points.push(points[0]);
+    return {
+      type: "Feature" as const,
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [points],
+      },
+      properties: { id: ib.id, highRisk: ib.highRisk },
+    };
+  });
+
+  const bodyFeatures = icebergList.map((ib) => {
+    const lon = ib.lon;
+    const lat = ib.lat;
+    const diam = ib.diameterNm || 1.5;
+    const physRadiusNm = diam / 2.0;
+    const points = [];
+    const numPoints = 20;
+    const radiusDeg = physRadiusNm / 60.0;
+    const cosLat = Math.cos((lat * Math.PI) / 180.0);
+    for (let i = 0; i < numPoints; i++) {
+      const angle = (i * 2 * Math.PI) / numPoints;
+      const dx = (Math.sin(angle) * radiusDeg) / cosLat;
+      const dy = Math.cos(angle) * radiusDeg;
+      points.push([lon + dx, lat + dy]);
+    }
+    points.push(points[0]);
+    return {
+      type: "Feature" as const,
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [points],
+      },
+      properties: { id: ib.id, name: ib.name, highRisk: ib.highRisk },
+    };
+  });
+
+  const pointFeatures = icebergList.map((ib) => ({
+    type: "Feature" as const,
+    geometry: {
+      type: "Point" as const,
+      coordinates: [ib.lon, ib.lat],
+    },
+    properties: {
+      id: ib.id,
+      name: ib.name,
+      highRisk: ib.highRisk,
+      status: ib.status || "tracking",
+      diameterNm: ib.diameterNm || 1.5,
+      dangerRadiusNm: ib.dangerRadiusNm || 7.0,
+      sizeClass: ib.sizeClass || "medium",
+    },
+  }));
+
+  return {
+    risk: { type: "FeatureCollection" as const, features: riskFeatures },
+    body: { type: "FeatureCollection" as const, features: bodyFeatures },
+    points: { type: "FeatureCollection" as const, features: pointFeatures },
+  };
+}
+
 export default function HomePage() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const lastFittedRouteKeyRef = useRef<string>("");
 
-  // States
-  const [icebergs, setIcebergs] = useState<Iceberg[]>([]);
+  // States - immediately pre-seeded so icebergs appear instantly without network wait
+  const storeIcebergs = usePolarisStore((s) => s.allIcebergs?.length > 0 ? s.allIcebergs : s.icebergs);
+  const [icebergs, setIcebergs] = useState<Iceberg[]>(() => {
+    if (typeof window !== "undefined") {
+      const s = usePolarisStore.getState();
+      if (s.allIcebergs && s.allIcebergs.length > 0) return s.allIcebergs as any;
+      if (s.icebergs && s.icebergs.length > 0) return s.icebergs as any;
+    }
+    return ALL_ICEBERGS as any;
+  });
+
+  // Sync state if store updates from API or navigation
+  useEffect(() => {
+    if (storeIcebergs && storeIcebergs.length > 0) {
+      setIcebergs(storeIcebergs as any);
+    }
+  }, [storeIcebergs]);
+
   const [iceCells, setIceCells] = useState<IceCell[]>([]);
   const routes = usePolarisStore((s) => s.routes);
   const selectedRouteId = usePolarisStore((s) => s.lockedRouteId);
@@ -105,10 +198,17 @@ export default function HomePage() {
 
   // Fetch initial data
   useEffect(() => {
-    // 1. Fetch icebergs
+    // Pre-populate store if empty
+    const s = usePolarisStore.getState();
+    if (!s.allIcebergs || s.allIcebergs.length === 0) {
+      s.setIcebergs(ALL_ICEBERGS);
+      s.setAllIcebergs(ALL_ICEBERGS);
+    }
+
+    // 1. Fetch icebergs in background
     fetchIcebergs()
       .then((data) => {
-        if (data.icebergs) {
+        if (data.icebergs && data.icebergs.length > 0) {
           setIcebergs(data.icebergs);
           usePolarisStore.getState().setIcebergs(data.icebergs);
           usePolarisStore.getState().setAllIcebergs(data.icebergs);
@@ -284,6 +384,58 @@ export default function HomePage() {
         paint: {
           "line-color": "#eab308",
           "line-width": 2.5,
+        },
+      });
+
+      // Initialize all 38 icebergs instantly on frame 0 WebGL
+      const initialIcebergsGeo = buildIcebergFeatures(ALL_ICEBERGS);
+
+      map.addSource("risk-circles-source", {
+        type: "geojson",
+        data: initialIcebergsGeo.risk,
+      });
+      map.addLayer({
+        id: "risk-circles-layer",
+        type: "fill",
+        source: "risk-circles-source",
+        paint: {
+          "fill-color": "rgba(239, 68, 68, 0.08)",
+          "fill-outline-color": "rgba(239, 68, 68, 0.65)",
+        },
+      });
+
+      map.addSource("iceberg-bodies-source", {
+        type: "geojson",
+        data: initialIcebergsGeo.body,
+      });
+      map.addLayer({
+        id: "iceberg-bodies-layer",
+        type: "fill",
+        source: "iceberg-bodies-source",
+        paint: {
+          "fill-color": "rgba(248, 250, 252, 0.9)",
+          "fill-outline-color": "#38bdf8",
+        },
+      });
+
+      map.addSource("iceberg-points-source", {
+        type: "geojson",
+        data: initialIcebergsGeo.points,
+      });
+      map.addLayer({
+        id: "iceberg-points-layer",
+        type: "circle",
+        source: "iceberg-points-source",
+        paint: {
+          "circle-radius": 5.5,
+          "circle-color": [
+            "case",
+            ["get", "highRisk"],
+            "#ef4444",
+            "#eab308"
+          ],
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#ffffff",
         },
       });
 
@@ -605,174 +757,89 @@ export default function HomePage() {
   const markersRef = useRef<maplibregl.Marker[]>([]);
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapLoaded || !map.isStyleLoaded()) return;
 
-    markersRef.current.forEach((m) => m.remove());
-    markersRef.current = [];
+    try {
+      const geo = buildIcebergFeatures(showIcebergs ? icebergs : []);
 
-    if (map.getLayer("risk-circles-layer")) {
-      map.removeLayer("risk-circles-layer");
-    }
-    if (map.getLayer("iceberg-bodies-layer")) {
-      map.removeLayer("iceberg-bodies-layer");
-    }
-    if (map.getSource("risk-circles-source")) {
-      map.removeSource("risk-circles-source");
-    }
-    if (map.getSource("iceberg-bodies-source")) {
-      map.removeSource("iceberg-bodies-source");
-    }
+      const riskSrc = map.getSource("risk-circles-source") as maplibregl.GeoJSONSource;
+      if (riskSrc) riskSrc.setData(geo.risk);
 
-    if (!showIcebergs || icebergs.length === 0) return;
+      const bodySrc = map.getSource("iceberg-bodies-source") as maplibregl.GeoJSONSource;
+      if (bodySrc) bodySrc.setData(geo.body);
 
-    const riskCirclesFeatures = icebergs.map((ib) => {
-      const lon = ib.lon;
-      const lat = ib.lat;
-      const radiusNm = ib.dangerRadiusNm || 7.0;
-      const points = [];
-      const numPoints = 32;
-      const radiusDeg = radiusNm / 60.0;
-      const cosLat = Math.cos((lat * Math.PI) / 180.0);
-      for (let i = 0; i < numPoints; i++) {
-        const angle = (i * 2 * Math.PI) / numPoints;
-        const dx = (Math.sin(angle) * radiusDeg) / cosLat;
-        const dy = Math.cos(angle) * radiusDeg;
-        points.push([lon + dx, lat + dy]);
-      }
-      points.push(points[0]);
-      return {
-        type: "Feature" as const,
-        geometry: {
-          type: "Polygon" as const,
-          coordinates: [points],
-        },
-        properties: { id: ib.id, highRisk: ib.highRisk },
-      };
-    });
+      const ptSrc = map.getSource("iceberg-points-source") as maplibregl.GeoJSONSource;
+      if (ptSrc) ptSrc.setData(geo.points);
 
-    const bodyCirclesFeatures = icebergs.map((ib) => {
-      const lon = ib.lon;
-      const lat = ib.lat;
-      const diam = ib.diameterNm || 1.5;
-      const physRadiusNm = diam / 2.0;
-      const points = [];
-      const numPoints = 24;
-      const radiusDeg = physRadiusNm / 60.0;
-      const cosLat = Math.cos((lat * Math.PI) / 180.0);
-      for (let i = 0; i < numPoints; i++) {
-        const angle = (i * 2 * Math.PI) / numPoints;
-        const dx = (Math.sin(angle) * radiusDeg) / cosLat;
-        const dy = Math.cos(angle) * radiusDeg;
-        points.push([lon + dx, lat + dy]);
-      }
-      points.push(points[0]);
-      return {
-        type: "Feature" as const,
-        geometry: {
-          type: "Polygon" as const,
-          coordinates: [points],
-        },
-        properties: { id: ib.id, name: ib.name },
-      };
-    });
+      markersRef.current.forEach((m) => m.remove());
+      markersRef.current = [];
 
-    map.addSource("risk-circles-source", {
-      type: "geojson",
-      data: {
-        type: "FeatureCollection",
-        features: riskCirclesFeatures,
-      },
-    });
+      if (!showIcebergs || icebergs.length === 0) return;
 
-    map.addLayer({
-      id: "risk-circles-layer",
-      type: "fill",
-      source: "risk-circles-source",
-      paint: {
-        "fill-color": "rgba(239, 68, 68, 0.08)",
-        "fill-outline-color": "rgba(239, 68, 68, 0.65)",
-      },
-    });
+      icebergs.forEach((ib) => {
+        let svgContent = "";
+        if (ib.predictedPath && ib.predictedPath.length >= 2) {
+          const lats = ib.predictedPath.map((p) => p.lat);
+          const lons = ib.predictedPath.map((p) => p.lon);
+          const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+          const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+          const latRange = maxLat - minLat || 0.01;
+          const lonRange = maxLon - minLon || 0.01;
+          const w = 140, h = 60, pad = 8;
+          const getX = (lon: number) => pad + ((lon - minLon) / lonRange) * (w - 2 * pad);
+          const getY = (lat: number) => h - (pad + ((lat - minLat) / latRange) * (h - 2 * pad));
+          const ptsStr = ib.predictedPath.map((p) => `${getX(p.lon)},${getY(p.lat)}`).join(" ");
+          svgContent = `
+            <div style="margin-top: 6px; padding: 4px; background: #0f172a; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
+              <div style="font-size: 8px; color: #94a3b8; font-weight: bold; margin-bottom: 2px;">72H DRIFT TRAJECTORY</div>
+              <svg width="${w}" height="${h}">
+                <polyline points="${ptsStr}" fill="none" stroke="#eab308" stroke-width="1.5" stroke-dasharray="3,2" />
+                ${ib.predictedPath.map((p) => `<circle cx="${getX(p.lon)}" cy="${getY(p.lat)}" r="2" fill="#38bdf8" />`).join("")}
+              </svg>
+            </div>
+          `;
+        }
 
-    map.addSource("iceberg-bodies-source", {
-      type: "geojson",
-      data: {
-        type: "FeatureCollection",
-        features: bodyCirclesFeatures,
-      },
-    });
-
-    map.addLayer({
-      id: "iceberg-bodies-layer",
-      type: "fill",
-      source: "iceberg-bodies-source",
-      paint: {
-        "fill-color": "rgba(248, 250, 252, 0.9)",
-        "fill-outline-color": "#38bdf8",
-      },
-    });
-
-    icebergs.forEach((ib) => {
-      let svgContent = "";
-      if (ib.predictedPath && ib.predictedPath.length >= 2) {
-        const lats = ib.predictedPath.map((p) => p.lat);
-        const lons = ib.predictedPath.map((p) => p.lon);
-        const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-        const minLon = Math.min(...lons), maxLon = Math.max(...lons);
-        const latRange = maxLat - minLat || 0.01;
-        const lonRange = maxLon - minLon || 0.01;
-        const w = 140, h = 60, pad = 8;
-        const getX = (lon: number) => pad + ((lon - minLon) / lonRange) * (w - 2 * pad);
-        const getY = (lat: number) => h - (pad + ((lat - minLat) / latRange) * (h - 2 * pad));
-        const ptsStr = ib.predictedPath.map((p) => `${getX(p.lon)},${getY(p.lat)}`).join(" ");
-        svgContent = `
-          <div style="margin-top: 6px; padding: 4px; background: #0f172a; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1);">
-            <div style="font-size: 8px; color: #94a3b8; font-weight: bold; margin-bottom: 2px;">72H DRIFT TRAJECTORY</div>
-            <svg width="${w}" height="${h}">
-              <polyline points="${ptsStr}" fill="none" stroke="#eab308" stroke-width="1.5" stroke-dasharray="3,2" />
-              ${ib.predictedPath.map((p) => `<circle cx="${getX(p.lon)}" cy="${getY(p.lat)}" r="2" fill="#38bdf8" />`).join("")}
-            </svg>
+        const htmlContent = `
+          <div style="padding: 8px 10px; font-size: 11px; font-family: monospace; color: white; background: #0f172a; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); min-width: 160px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <strong style="color: ${ib.highRisk ? '#ef4444' : '#eab308'}; font-size: 12px;">${ib.name}</strong>
+              <span style="font-size: 9px; padding: 1px 4px; border-radius: 3px; background: ${ib.highRisk ? 'rgba(239,68,68,0.2)' : 'rgba(234,179,8,0.2)'}; color: ${ib.highRisk ? '#f87171' : '#fde047'};">${(ib.status || 'tracking').toUpperCase()}</span>
+            </div>
+            <div style="font-size: 10px; color: #94a3b8; line-height: 1.4;">
+              <div>ID: <span style="color: #cbd5e1;">${ib.id}</span></div>
+              <div>Pos: <span style="color: #cbd5e1;">${ib.lat.toFixed(2)}°, ${ib.lon.toFixed(2)}°</span></div>
+              <div>Size: <span style="color: #cbd5e1;">${ib.sizeClass || 'medium'} (${ib.diameterNm || 6} NM)</span></div>
+              <div>Danger Radius: <span style="color: #cbd5e1;">${ib.dangerRadiusNm || 6} NM</span></div>
+            </div>
+            ${svgContent}
           </div>
         `;
-      }
 
-      const htmlContent = `
-        <div style="padding: 8px 10px; font-size: 11px; font-family: monospace; color: white; background: #0f172a; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); min-width: 160px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <strong style="color: ${ib.highRisk ? '#ef4444' : '#eab308'}; font-size: 12px;">${ib.name}</strong>
-            <span style="font-size: 9px; padding: 1px 4px; border-radius: 3px; background: ${ib.highRisk ? 'rgba(239,68,68,0.2)' : 'rgba(234,179,8,0.2)'}; color: ${ib.highRisk ? '#f87171' : '#fde047'};">${(ib.status || 'tracking').toUpperCase()}</span>
-          </div>
-          <div style="font-size: 10px; color: #94a3b8; line-height: 1.4;">
-            <div>ID: <span style="color: #cbd5e1;">${ib.id}</span></div>
-            <div>Pos: <span style="color: #cbd5e1;">${ib.lat.toFixed(2)}°, ${ib.lon.toFixed(2)}°</span></div>
-            <div>Size: <span style="color: #cbd5e1;">${ib.sizeClass || 'medium'} (${ib.diameterNm || 6} NM)</span></div>
-            <div>Danger Radius: <span style="color: #cbd5e1;">${ib.dangerRadiusNm || 6} NM</span></div>
-          </div>
-          ${svgContent}
-        </div>
-      `;
+        const popupNode = document.createElement("div");
+        popupNode.innerHTML = htmlContent;
 
-      const popupNode = document.createElement("div");
-      popupNode.innerHTML = htmlContent;
+        const popup = new maplibregl.Popup({
+          offset: 20,
+          closeButton: true,
+          className: "hud-popup-container",
+        }).setDOMContent(popupNode);
 
-      const popup = new maplibregl.Popup({
-        offset: 20,
-        closeButton: true,
-        className: "hud-popup-container",
-      }).setDOMContent(popupNode);
+        const color = ib.highRisk ? "#ef4444" : "#eab308";
+        const marker = new maplibregl.Marker({ color })
+          .setLngLat([ib.lon, ib.lat])
+          .setPopup(popup)
+          .addTo(map);
 
-      const color = ib.highRisk ? "#ef4444" : "#eab308";
-      const marker = new maplibregl.Marker({ color })
-        .setLngLat([ib.lon, ib.lat])
-        .setPopup(popup)
-        .addTo(map);
+        popup.on("open", () => setSelectedIceberg(ib));
+        popup.on("close", () => setSelectedIceberg((prev) => (prev?.id === ib.id ? null : prev)));
 
-      popup.on("open", () => setSelectedIceberg(ib));
-      popup.on("close", () => setSelectedIceberg((prev) => (prev?.id === ib.id ? null : prev)));
-
-      markersRef.current.push(marker);
-    });
-  }, [icebergs, showIcebergs]);
+        markersRef.current.push(marker);
+      });
+    } catch (e) {
+      console.warn("Error updating iceberg layers/markers:", e);
+    }
+  }, [icebergs, showIcebergs, mapLoaded]);
 
   // Manage Start ("S") and Destination ("D") Markers
   const endpointMarkersRef = useRef<maplibregl.Marker[]>([]);
@@ -814,8 +881,10 @@ export default function HomePage() {
   const handleRouteSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await fetchRoutesIfNeeded(startCoords, destCoords, true);
-      lockRoute("balanced");
+      const data = await fetchRoutesIfNeeded(startCoords, destCoords, true);
+      if (data && data.length > 0) {
+        lockRoute(selectedRouteId || "safest");
+      }
     } catch (err) {
       console.error("Failed to compute routes:", err);
     }
@@ -1050,6 +1119,7 @@ export default function HomePage() {
                   <input
                     type="text"
                     value={startCoords.join(", ")}
+                    suppressHydrationWarning
                     onChange={(e) => {
                       const parts = e.target.value.split(",").map((p) => parseFloat(p.trim()) || 0);
                       if (parts.length === 2) setStartCoords([parts[0], parts[1]]);
@@ -1078,6 +1148,7 @@ export default function HomePage() {
                   <input
                     type="text"
                     value={destCoords.join(", ")}
+                    suppressHydrationWarning
                     onChange={(e) => {
                       const parts = e.target.value.split(",").map((p) => parseFloat(p.trim()) || 0);
                       if (parts.length === 2) setDestCoords([parts[0], parts[1]]);
@@ -1130,7 +1201,7 @@ export default function HomePage() {
             </div>
 
             <div className="border border-white/10 rounded-xl overflow-hidden bg-slate-950/70">
-              <table className="w-full text-left text-xs border-collapse">
+              <table className="w-full text-left text-xs border-collapse" suppressHydrationWarning>
                 <thead>
                   <tr className="bg-white/5 text-white/50 border-b border-white/10 text-[9px] uppercase font-bold tracking-wider">
                     <th className="p-1.5 pl-2.5">Profile</th>
@@ -1142,7 +1213,7 @@ export default function HomePage() {
                     <th className="p-1.5 text-center">Lock</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5 text-[10px] font-mono tabular-nums">
+                <tbody className="divide-y divide-white/5 text-[10px] font-mono tabular-nums" suppressHydrationWarning>
                   {routes.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="p-3 text-center text-white/40 italic font-sans text-xs">
@@ -1161,14 +1232,15 @@ export default function HomePage() {
                           className={`cursor-pointer transition-colors ${
                             isSelected ? "bg-white/10 text-white font-bold" : "text-white/70 hover:bg-white/5"
                           }`}
+                          suppressHydrationWarning
                         >
                           <td className={`p-1.5 pl-2.5 font-bold ${cfg.color} capitalize`}>
                             {cfg.label}
                           </td>
-                          <td className="p-1.5 text-right">{r.distanceNm.toFixed(1)}</td>
-                          <td className="p-1.5 text-right">{r.etaHours.toFixed(1)}h</td>
-                          <td className="p-1.5 text-right">{r.fuelMt.toFixed(1)}</td>
-                          <td className="p-1.5 text-right font-mono text-cyan-300">
+                          <td className="p-1.5 text-right" suppressHydrationWarning>{r.distanceNm.toFixed(1)}</td>
+                          <td className="p-1.5 text-right" suppressHydrationWarning>{r.etaHours.toFixed(1)}h</td>
+                          <td className="p-1.5 text-right" suppressHydrationWarning>{r.fuelMt.toFixed(1)}</td>
+                          <td className="p-1.5 text-right font-mono text-cyan-300" suppressHydrationWarning>
                             <span>{maxSic}%</span>
                             {maxSic > 70 && (
                               <span className="ml-1 px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 text-[8px] font-sans font-bold">
@@ -1176,10 +1248,10 @@ export default function HomePage() {
                               </span>
                             )}
                           </td>
-                          <td className="p-1.5 text-right font-bold text-emerald-400">
+                          <td className="p-1.5 text-right font-bold text-emerald-400" suppressHydrationWarning>
                             {(r.riskScore * 100).toFixed(0)}%
                           </td>
-                          <td className="p-1.5 text-center">
+                          <td className="p-1.5 text-center" suppressHydrationWarning>
                             <span
                               className={`inline-block px-1.5 py-0.5 rounded text-[8px] font-sans font-bold uppercase ${
                                 isSelected

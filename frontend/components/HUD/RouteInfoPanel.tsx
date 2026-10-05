@@ -126,17 +126,17 @@ export function RouteInfoPanel() {
       </div>
 
       {/* Main Stats */}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs mb-3.5">
+      <dl suppressHydrationWarning className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs mb-3.5">
         <dt className="text-white/45 text-[11px]">Selected Profile</dt>
-        <dd className={`font-semibold capitalize ${cfg.color}`}>{route.name}</dd>
+        <dd suppressHydrationWarning className={`font-semibold capitalize ${cfg.color}`}>{route.name}</dd>
 
         <dt className="text-white/45 text-[11px]">Route Distance</dt>
-        <dd className="tabular-nums font-mono text-white/90 font-semibold">
+        <dd suppressHydrationWarning className="tabular-nums font-mono text-white/90 font-semibold">
           {route.distanceNm.toFixed(1)} NM
         </dd>
 
         <dt className="text-white/45 text-[11px]">Estimated ETA</dt>
-        <dd className="tabular-nums font-mono text-white/90">
+        <dd suppressHydrationWarning className="tabular-nums font-mono text-white/90">
           {route.etaHours.toFixed(1)} hrs
           {route.avgSpeedKts ? (
             <span className="text-white/40 ml-1">@ {route.avgSpeedKts} kt</span>
@@ -144,17 +144,17 @@ export function RouteInfoPanel() {
         </dd>
 
         <dt className="text-white/45 text-[11px]">Est. Fuel Burn</dt>
-        <dd className="tabular-nums font-mono text-white/90">
+        <dd suppressHydrationWarning className="tabular-nums font-mono text-white/90">
           {route.fuelMt.toFixed(1)} MT
         </dd>
 
         <dt className="text-white/45 text-[11px]">Risk Factor</dt>
-        <dd className="tabular-nums font-mono text-emerald-400 font-semibold">
+        <dd suppressHydrationWarning className="tabular-nums font-mono text-emerald-400 font-semibold">
           {(route.riskScore * 100).toFixed(0)}%
         </dd>
 
         <dt className="text-white/45 text-[11px]">Route Max SIC</dt>
-        <dd className="tabular-nums font-mono text-cyan-300 font-semibold flex items-center gap-1.5">
+        <dd suppressHydrationWarning className="tabular-nums font-mono text-cyan-300 font-semibold flex items-center gap-1.5">
           <span>{((route as any).maxSicPct ?? 79.6).toFixed(0)}%</span>
           {((route as any).maxSicPct ?? 79.6) > 70 && (
             <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-sans font-bold">
@@ -164,7 +164,7 @@ export function RouteInfoPanel() {
         </dd>
 
         <dt className="text-white/45 text-[11px]">SIC at Ship</dt>
-        <dd className="tabular-nums font-mono text-sky-200">
+        <dd suppressHydrationWarning className="tabular-nums font-mono text-sky-200">
           {Math.min(95, Math.max(5, Math.round(15 + 65 / (1 + Math.exp((vessel.lat + 64) / 2)))))}%
         </dd>
       </dl>

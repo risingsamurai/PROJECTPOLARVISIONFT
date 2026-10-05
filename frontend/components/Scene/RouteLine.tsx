@@ -58,23 +58,49 @@ function SingleRouteLine({
       sampled[sampled.length - 1].copy(pts[pts.length - 1]);
     }
 
-    // Safety clearance guarantee in 3D: push sampled points outside iceberg physical bodies
+    // Safety clearance guarantee in 3D: push sampled points outside iceberg physical bodies and drift zones
     const bergs = usePolarisStore.getState().icebergs;
     if (bergs && bergs.length > 0) {
-      sampled.forEach((p, idx) => {
-        if (idx === 0 || idx === sampled.length - 1) return;
-        bergs.forEach((b) => {
-          const [bx, , bz] = latLonToScene(b.lat, b.lon);
-          const diam = b.diameterNm || 1.5;
-          const hardR = (diam / 2.0) + Math.max(1.5, 0.25 * (diam / 2.0));
-          const d = Math.hypot(p.x - bx, p.z - bz);
-          if (d < hardR && d > 0.001) {
-            const push = (hardR - d) + 0.2;
-            p.x += ((p.x - bx) / d) * push;
-            p.z += ((p.z - bz) / d) * push;
-          }
+      for (let pass = 0; pass < 3; pass++) {
+        sampled.forEach((p, idx) => {
+          if (idx === 0 || idx === sampled.length - 1) return;
+          bergs.forEach((b) => {
+            // 1. Iceberg physical body and danger ring clearance
+            const [bx, , bz] = latLonToScene(b.lat, b.lon);
+            const dangerR = b.dangerRadiusNm || 7.0;
+            const visualR = Math.max(6.2, Math.min(dangerR * 1.05, Math.max(dangerR * 0.72, 6.2)));
+            const hardR = visualR + 2.2;
+            const d = Math.hypot(p.x - bx, p.z - bz);
+            if (d < hardR && d > 0.001) {
+              const push = (hardR - d) + 0.4;
+              p.x += ((p.x - bx) / d) * push;
+              p.z += ((p.z - bz) / d) * push;
+            }
+
+            // 2. Future predicted drift trajectory clearance (+24h, +48h, +72h)
+            if (b.predictedPath && b.predictedPath.length > 0) {
+              b.predictedPath.forEach((pt) => {
+                if (pt.hour > 0) {
+                  const [px, , pz] = latLonToScene(pt.lat, pt.lon);
+                  const predClearance = Math.max(4.2, 3.2 * Math.sqrt(pt.hour / 24.0));
+                  const dPred = Math.hypot(p.x - px, p.z - pz);
+                  if (dPred < predClearance && dPred > 0.001) {
+                    const pushPred = (predClearance - dPred) + 0.3;
+                    p.x += ((p.x - px) / dPred) * pushPred;
+                    p.z += ((p.z - pz) / dPred) * pushPred;
+                  }
+                }
+              });
+            }
+          });
         });
-      });
+
+        // Smooth between adjacent points
+        for (let i = 1; i < sampled.length - 1; i++) {
+          sampled[i].x = sampled[i].x * 0.6 + (sampled[i - 1].x + sampled[i + 1].x) * 0.2;
+          sampled[i].z = sampled[i].z * 0.6 + (sampled[i - 1].z + sampled[i + 1].z) * 0.2;
+        }
+      }
     }
 
     const lines: number[] = [];

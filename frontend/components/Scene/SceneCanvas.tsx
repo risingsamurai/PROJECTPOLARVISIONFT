@@ -59,6 +59,7 @@ function ChaseCamera() {
   const { camera, gl } = useThree();
   const dragging = useRef(false);
   const last = useRef({ x: 0, y: 0 });
+  const currentCenter = useRef<THREE.Vector3 | null>(null);
 
   useEffect(() => {
     const el = gl.domElement;
@@ -108,43 +109,66 @@ function ChaseCamera() {
   useFrame(() => {
     const {
       vessel,
+      icebergs,
+      selectedIcebergId,
       orbitYaw,
       orbitPitch,
       cameraDistance,
       cameraTargetCoord,
     } = usePolarisStore.getState();
 
-    // Camera targets the vessel (or cameraTargetCoord if waypoint focused), NEVER dragged to distant icebergs
-    let targetPosition = { lat: vessel.lat, lon: vessel.lon };
-    if (cameraTargetCoord) {
-      targetPosition = { lat: cameraTargetCoord[0], lon: cameraTargetCoord[1] };
+    // Target vessel by default; if iceberg selected, fly to and frame the iceberg
+    let targetLat = vessel.lat;
+    let targetLon = vessel.lon;
+    let baseHeadingRad = THREE.MathUtils.degToRad(vessel.headingDeg);
+    let effectiveDist = cameraDistance;
+
+    if (selectedIcebergId) {
+      const selectedIb = icebergs.find((i) => i.id === selectedIcebergId);
+      if (selectedIb) {
+        targetLat = selectedIb.lat;
+        targetLon = selectedIb.lon;
+        baseHeadingRad = THREE.MathUtils.degToRad(selectedIb.headingDeg || 0);
+        effectiveDist = Math.max(cameraDistance, 28);
+      }
+    } else if (cameraTargetCoord) {
+      targetLat = cameraTargetCoord[0];
+      targetLon = cameraTargetCoord[1];
     }
     
-    const [x, , z] = latLonToScene(targetPosition.lat, targetPosition.lon);
+    const [tx, , tz] = latLonToScene(targetLat, targetLon);
 
-    const vesselHeadingRad = THREE.MathUtils.degToRad(vessel.headingDeg);
-    const totalYaw = vesselHeadingRad + orbitYaw;
+    if (!currentCenter.current) {
+      currentCenter.current = new THREE.Vector3(tx, 0, tz);
+    } else {
+      currentCenter.current.lerp(new THREE.Vector3(tx, 0, tz), 0.08);
+    }
+
+    const x = currentCenter.current.x;
+    const z = currentCenter.current.z;
+
+    const totalYaw = baseHeadingRad + orbitYaw;
 
     const forwardX = Math.sin(totalYaw);
     const forwardZ = -Math.cos(totalYaw);
 
-    const horizontalDist = cameraDistance * Math.cos(orbitPitch);
+    const horizontalDist = effectiveDist * Math.cos(orbitPitch);
     const cx = x - forwardX * horizontalDist;
     const cz = z - forwardZ * horizontalDist;
-    const cy = 3.8 + Math.sin(orbitPitch) * cameraDistance;
+    const cy = 4.2 + Math.sin(orbitPitch) * effectiveDist;
 
     const targetPos = new THREE.Vector3(cx, cy, cz);
     const distToTarget = camera.position.distanceTo(targetPos);
-    if (distToTarget > 120) {
+    if (distToTarget > 200) {
       camera.position.copy(targetPos);
     } else {
-      camera.position.lerp(targetPos, 0.1);
+      camera.position.lerp(targetPos, 0.08);
     }
 
     const lookTarget = new THREE.Vector3(
-      x + forwardX * 6,
-      1.8,
-      z + forwardZ * 6
+      x + forwardX * 4,
+      2.0,
+      z + forwardZ * 4
     );
     camera.lookAt(lookTarget);
   });

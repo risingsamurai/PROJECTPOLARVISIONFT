@@ -36,10 +36,26 @@ export async function fetchDataStatus(timeoutMs = 5000): Promise<DataStatusRespo
   }
 }
 
+let _icebergsCache: { count: number; icebergs: any[] } | null = null;
+
 export async function fetchIcebergs() {
+  if (_icebergsCache && _icebergsCache.icebergs?.length > 0) {
+    // Return cached immediately and refresh in background
+    fetch(`${API_BASE}/api/icebergs`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && data.icebergs?.length > 0) _icebergsCache = data;
+      })
+      .catch(() => {});
+    return _icebergsCache;
+  }
   const r = await fetch(`${API_BASE}/api/icebergs`);
   if (!r.ok) throw new Error("icebergs fetch failed");
-  return r.json() as Promise<{ count: number; icebergs: any[] }>;
+  const data = (await r.json()) as { count: number; icebergs: any[] };
+  if (data && data.icebergs?.length > 0) {
+    _icebergsCache = data;
+  }
+  return data;
 }
 
 export async function fetchForecast(day: number) {

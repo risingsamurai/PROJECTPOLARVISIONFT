@@ -265,7 +265,7 @@ const getInitialDestination = (): { lat: number; lon: number } => {
 
 export const usePolarisStore = create<PolarisState>((set, get) => ({
   vessel: getInitialVessel(),
-  icebergs: [],
+  icebergs: ALL_ICEBERGS,
   selectedIcebergId: null,
   colonies: FALLBACK_COLONIES,
   selectedColonyId: null,
@@ -562,7 +562,7 @@ export const usePolarisStore = create<PolarisState>((set, get) => ({
   setDataReality: (dataReality) => set((s) => ({ dataReality: { ...s.dataReality, ...dataReality } })),
   setSharedRoutes: (routes) => set({ routes, sharedRoutes: routes }),
   setSharedRouteLastFetch: (timestamp) => set({ sharedRouteLastFetch: timestamp }),
-  allIcebergs: [],
+  allIcebergs: ALL_ICEBERGS,
   setAllIcebergs: (allIcebergs) => set({ allIcebergs, icebergs: allIcebergs }),
   seaIceHeatmap: {
     opacity: 0.6,

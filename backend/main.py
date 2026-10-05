@@ -12,7 +12,7 @@ from data.era5_fetcher import run as fetch_era5
 from data.nsidc_fetcher import run as fetch_nsidc
 from db.models import iceberg_count, init_db, upsert_icebergs
 from db.redis_cache import get_json, set_json
-from routers import alerts, health, ice, icebergs, routing, telemetry, sea_ice_grid
+from routers import alerts, health, ice, icebergs, routing, telemetry, sea_ice_grid, wildlife, ocean
 
 import os
 from dotenv import load_dotenv, find_dotenv
@@ -180,6 +180,8 @@ app.include_router(icebergs.router, prefix="/api/icebergs", tags=["icebergs"])
 app.include_router(routing.router, prefix="/api/route", tags=["routing"])
 app.include_router(sea_ice_grid.router, prefix="/api/sea-ice", tags=["sea-ice"])
 app.include_router(telemetry.router, tags=["telemetry"])
+app.include_router(wildlife.router, prefix="/api/wildlife", tags=["wildlife"])
+app.include_router(ocean.router, prefix="/api/ocean", tags=["ocean"])
 
 
 @app.get("/")
