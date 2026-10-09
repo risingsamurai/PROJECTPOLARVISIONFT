@@ -47,3 +47,9 @@ frontend/scripts/run_step3_verification.js
 frontend/scripts/run_step3_comprehensive_verification.js
 frontend/scripts/run_step4_verification.js
 frontend/scripts/run_step4_clearance_and_sic_verification.js
+
+# keep land mask for deployment
+!backend/data/cache/
+backend/data/cache/*
+!backend/data/cache/land_mask.npy
+!backend/data/cache/land_mask_meta.json
